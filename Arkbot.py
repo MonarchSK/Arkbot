@@ -25,7 +25,7 @@ bot_commands_channels = {}
 bot_memory_channels = {}
 birthday_channels = {}
 
-# Leveling Configuration
+# Leveling & Cooldown Configuration
 MAX_LEVEL = 60
 XP_COOLDOWN_SECONDS = 60
 BUMP_COOLDOWN_SECONDS = 7200
@@ -410,6 +410,27 @@ async def before_birthdays():
     await bot.wait_until_ready()
 
 # ==========================================
+# DUAL-TIMER DISBOARD BUMP REMINDER
+# ==========================================
+async def schedule_bump_reminders(guild: discord.Guild, bump_channel: discord.TextChannel):
+    """Handles the two-stage countdown and pings the Bump Ping role when available."""
+    # Timer 1: 1 Hour 45 Minutes (6300s) -> 15-Minute Warning
+    await asyncio.sleep(6300)
+    target_unix = int(datetime.datetime.now(datetime.timezone.utc).timestamp() + 900)
+    await bump_channel.send(
+        f"⏳ **Bump Heads-Up**: Next bump available in **15 minutes** (<t:{target_unix}:R>)!"
+    )
+
+    # Timer 2: Remaining 15 Minutes (900s) -> Total 2 Hours (7200s)
+    await asyncio.sleep(900)
+    bump_role = discord.utils.get(guild.roles, name="Bump Ping")
+    role_mention = bump_role.mention if bump_role else "@here"
+
+    await bump_channel.send(
+        f"🔔 {role_mention} **It's Time To Bump!** Use `/bump` to promote the server again!"
+    )
+
+# ==========================================
 # UI CONFIRMATION VIEW FOR RESTOREDATA
 # ==========================================
 class RestoreConfirmView(discord.ui.View):
@@ -559,6 +580,9 @@ async def on_message(message: discord.Message):
                         await message.channel.send(f"Thank you for bumping, {bumper.mention}! (+200 XP)\n*{cheer}*")
                     else:
                         await message.channel.send(f"Server bumped successfully! (+200 XP)\n*{cheer}*")
+
+                    # Launch two-stage reminder timers
+                    asyncio.create_task(schedule_bump_reminders(message.guild, bump_ch))
 
     # AFK Ping Watcher
     if message.mentions:
