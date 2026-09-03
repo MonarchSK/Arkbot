@@ -21,9 +21,9 @@ bot = commands.Bot(command_prefix=".", intents=intents)
 # Configuration
 NEW_MEMBER_ROLE = "Newbie"
 DISBOARD_BOT_ID = 302050872383422240
-ANNOUNCEMENT_CHANNEL_ID = 0  # Automatically managed level announcement channel
-BUMP_CHANNEL_ID = 0          # Strictly locks bump functionality to a single channel
-TEAM_NEWS_CHANNEL_ID = 0     # Automatically handles bot update announcements
+ANNOUNCEMENT_CHANNEL_ID = 0   # Automatically managed level announcement channel
+BUMP_CHANNEL_ID = 0           # Strictly locks bump functionality to a single channel
+BOT_COMMANDS_CHANNEL_ID = 0   # Dedicated channel for bot updates and guide commands
 
 # Storage Dictionaries
 afk_users = {}
@@ -100,22 +100,23 @@ async def get_or_create_announcement_channel(guild):
     except discord.Forbidden:
         return None
 
-async def get_or_create_team_news_channel(guild):
-    global TEAM_NEWS_CHANNEL_ID
-    if TEAM_NEWS_CHANNEL_ID:
-        channel = guild.get_channel(TEAM_NEWS_CHANNEL_ID)
+async def get_or_create_bot_commands_channel(guild):
+    """Fetches or automatically creates the #bot-commands channel for guides and updates."""
+    global BOT_COMMANDS_CHANNEL_ID
+    if BOT_COMMANDS_CHANNEL_ID:
+        channel = guild.get_channel(BOT_COMMANDS_CHANNEL_ID)
         if channel:
             return channel
 
     for channel in guild.text_channels:
-        if channel.name.lower() in ["team-news", "team_news", "teamnews"]:
-            TEAM_NEWS_CHANNEL_ID = channel.id
+        if channel.name.lower() in ["bot-commands", "bot_commands", "team-guide", "team_guide"]:
+            BOT_COMMANDS_CHANNEL_ID = channel.id
             return channel
 
     try:
-        new_channel = await guild.create_text_channel("team-news")
-        TEAM_NEWS_CHANNEL_ID = new_channel.id
-        await new_channel.send("📰 **Team News Channel Initialized!** Bot update logs and announcements will be posted here.")
+        new_channel = await guild.create_text_channel("bot-commands")
+        BOT_COMMANDS_CHANNEL_ID = new_channel.id
+        await new_channel.send("🤖 **Bot Commands & Team Guide Channel Initialized!** Command logs and guides are managed here.")
         return new_channel
     except discord.Forbidden:
         return None
@@ -170,7 +171,7 @@ async def on_ready():
     
     for guild in bot.guilds:
         await get_or_create_bump_channel(guild)
-        await get_or_create_team_news_channel(guild)
+        await get_or_create_bot_commands_channel(guild)
         announcement_channel = await get_or_create_announcement_channel(guild)
 
         # SCAN OLD MEMBERS ON STARTUP
@@ -276,6 +277,87 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # Commands
+@bot.command(name="botcommands")
+@is_admin_or_higher()
+async def bot_commands(ctx):
+    """Team guide listing all available bot commands. Restricted to #bot-commands / #team-guide and privileged roles."""
+    target_channel = await get_or_create_bot_commands_channel(ctx.guild)
+    
+    if target_channel and ctx.channel.id != target_channel.id:
+        await ctx.send(f"❌ This team guide command can only be run inside {target_channel.mention}!")
+        return
+
+    embed = discord.Embed(
+        title="📜 Team Guide & Bot Commands Directory",
+        description="Here is the complete command guide for staff and management:",
+        color=discord.Color.gold(),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+
+    embed.add_field(
+        name="🛠️ Management & Administration Commands",
+        value=(
+            "`.botcommands` - Displays this team guide (Restricted to #bot-commands).\n"
+            "`.synclevels` - Scans server and syncs unindexed members to Level 1.\n"
+            "`.update <details>` - Broadcasts a bot update embed to #bot-commands.\n"
+            "`.purge <1-100>` - Deletes a specified amount of messages.\n"
+            "`.setup_bump` - Validates or creates the dedicated #bump channel.\n"
+            "`.setup_announcements` - Validates or creates #level-announcements."
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🛡️ Moderation Commands",
+        value=(
+            "`.mute @user <reason>` - Times out a user (1h, 6h, 12h scaling).\n"
+            "`.unmute @user` - Removes timeout/mute status from a member.\n"
+            "`.warn @user <reason>` - Warns a user (Auto-bans on 3rd warning).\n"
+            "`.clearwarns @user` - Clears warning history for a user.\n"
+            "`.kick @user <reason>` - Kicks a user from the server.\n"
+            "`.ban @user <reason>` - Bans a user from the server."
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="💬 General & Utility Commands",
+        value=(
+            "`.level [@user]` - Displays current level and XP.\n"
+            "`.bump` - Bumps the server for +200 XP (Locked to #bump).\n"
+            "`.afk <reason>` - Sets your AFK state and records mentions.\n"
+            "`.color <color_name>` - Assigns a Pro Hex color role.\n"
+            "`.about` - Displays bot author metadata and developer credits."
+        ),
+        inline=False
+    )
+
+    embed.set_footer(
+        text=f"Authorized Staff Only • Developed by {BOT_CREATOR_USERNAME} ({BOT_COMPANY_NAME})",
+        icon_url=ctx.author.display_avatar.url
+    )
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="update")
+@is_admin_or_higher()
+async def bot_update(ctx, *, update_details: str):
+    target_channel = await get_or_create_bot_commands_channel(ctx.guild)
+    if not target_channel:
+        await ctx.send("❌ Could not find or create the `#bot-commands` channel. Check my server permissions.")
+        return
+
+    update_embed = discord.Embed(
+        title="⚙️ Bot Update Announcement",
+        description=f"{update_details}\n\n*Created by {BOT_CREATOR_USERNAME} ({BOT_CREATOR_REAL_NAME}) | {BOT_COMPANY_NAME}*",
+        color=discord.Color.blue(),
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+    )
+    update_embed.set_footer(text=f"Updated by {ctx.author.display_name} • Powered by {BOT_COMPANY_NAME}", icon_url=ctx.author.display_avatar.url)
+
+    await target_channel.send(embed=update_embed)
+    await ctx.send(f"✅ Update notification successfully posted in {target_channel.mention}!")
+
 @bot.command(name="afk")
 async def afk(ctx, *, reason="AFK"):
     afk_users[ctx.author.id] = reason
@@ -315,25 +397,6 @@ async def about_bot(ctx):
     embed.add_field(name="Company", value=BOT_COMPANY_NAME, inline=True)
     embed.set_footer(text=f"Created by {BOT_CREATOR_USERNAME} | {BOT_COMPANY_NAME}")
     await ctx.send(embed=embed)
-
-@bot.command(name="update")
-@is_admin_or_higher()
-async def bot_update(ctx, *, update_details: str):
-    news_channel = await get_or_create_team_news_channel(ctx.guild)
-    if not news_channel:
-        await ctx.send("❌ Could not find or create the `#team-news` channel. Check my server permissions.")
-        return
-
-    update_embed = discord.Embed(
-        title="⚙️ Bot Update Announcement",
-        description=f"{update_details}\n\n*Created by {BOT_CREATOR_USERNAME} ({BOT_CREATOR_REAL_NAME}) | {BOT_COMPANY_NAME}*",
-        color=discord.Color.blue(),
-        timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-    update_embed.set_footer(text=f"Updated by {ctx.author.display_name} • Powered by {BOT_COMPANY_NAME}", icon_url=ctx.author.display_avatar.url)
-
-    await news_channel.send(embed=update_embed)
-    await ctx.send(f"✅ Update notification successfully posted in {news_channel.mention}!")
 
 @bot.command()
 async def bump(ctx):
