@@ -2,42 +2,53 @@ import os
 import asyncio
 import datetime
 import random
+import json
 import discord
 from discord.ext import commands
 
-# Creator Metadata
+# ==========================================
+# CREATOR METADATA & CONFIGURATION
+# ==========================================
 BOT_CREATOR_USERNAME = "Monarch SK"
 BOT_CREATOR_REAL_NAME = "Subhan Ahmed"
 BOT_COMPANY_NAME = "Tire Three"
 
-# Bot Setup & Intents
-intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True
-intents.moderation = True
-
-bot = commands.Bot(command_prefix=".", intents=intents)
-
-# Configuration
-NEW_MEMBER_ROLE = "Newbie"
 DISBOARD_BOT_ID = 302050872383422240
-ANNOUNCEMENT_CHANNEL_ID = 0   # Automatically managed level announcement channel
-BUMP_CHANNEL_ID = 0           # Strictly locks bump functionality to a single channel
-BOT_COMMANDS_CHANNEL_ID = 0   # Dedicated channel for bot updates and guide commands
 
-# Storage Dictionaries
-afk_users = {}
-afk_mentions = {}
-user_xp = {}
-user_levels = {}
-user_warnings = {}
-user_mute_counts = {}
+# Dynamic Channel ID Storage
+ANNOUNCEMENT_CHANNEL_ID = 0
+BUMP_CHANNEL_ID = 0
+BOT_COMMANDS_CHANNEL_ID = 0
+BOT_MEMORY_CHANNEL_ID = 0 
 
-# Bump Management Variables
-last_bump_time = 0
-bump_cooldown_seconds = 7200  # 2 Hours
+# Leveling System Configuration
+BASE_XP_LEVEL_1 = 500
+MAX_LEVEL = 60
 
-# Cute Bump Phrases
+# Level Tier Mapping (1 to 60)
+LEVEL_TIER_ROLES = {
+    (1, 9): {"name": "Newbie", "color": discord.Color.teal()},
+    (10, 19): {"name": "Explorer", "color": discord.Color.green()},
+    (20, 29): {"name": "Veteran", "color": discord.Color.blue()},
+    (30, 39): {"name": "Elite", "color": discord.Color.purple()},
+    (40, 49): {"name": "Champion", "color": discord.Color.gold()},
+    (50, 59): {"name": "Legend", "color": discord.Color.orange()},
+    (60, 60): {"name": "Sovereign", "color": discord.Color.dark_red()}
+}
+
+# Protected Roles (Owner/Administrator Manual Modifications Only)
+RESTRICTED_ADMIN_ROLES = ["authority", "head moderator", "moderator"]
+
+# Pre-defined Hex Color Roles
+PRO_HEX_COLORS = {
+    "Pro Hex Red": discord.Color.from_rgb(255, 75, 75),
+    "Pro Hex Green": discord.Color.from_rgb(75, 255, 125),
+    "Pro Hex Blue": discord.Color.from_rgb(75, 150, 255),
+    "Pro Hex Pink": discord.Color.from_rgb(255, 105, 180),
+    "Pro Hex Yellow": discord.Color.from_rgb(255, 225, 75),
+    "Pro Hex Orange": discord.Color.from_rgb(255, 140, 0)
+}
+
 CUTE_BUMP_MESSAGES = [
     "You're absolute perfection! Thanks for helping us grow! 💖✨",
     "Sending you virtual warm hugs and lots of appreciation! 🧸🌸",
@@ -46,30 +57,43 @@ CUTE_BUMP_MESSAGES = [
     "You're a superstar! Server sparkles everywhere for you! ✨💖"
 ]
 
-PRO_HEX_COLORS = [
-    "Pro Hex Red",
-    "Pro Hex Green",
-    "Pro Hex Blue",
-    "Pro Hex Pink",
-    "Pro Hex Yellow",
-    "Pro Hex Orange",
-]
+# ==========================================
+# BOT SETUP & INTENTS
+# ==========================================
+intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
+intents.moderation = True
 
-BASE_XP_LEVEL_1 = 500
-MAX_LEVEL = 60
+bot = commands.Bot(command_prefix=".", intents=intents)
 
-PURGE_ALLOWED_ROLES = ["head moderator", "authority"]
+# Primary In-Memory Data Structures
+afk_users = {}
+afk_mentions = {}
+user_xp = {}
+user_levels = {}
+user_warnings = {}
+user_mute_counts = {}
 
-# Helper Functions
-def is_admin_or_higher():
-    """Custom check for Owner, Administrator, Head Moderator, or Authority."""
+last_bump_time = 0
+bump_cooldown_seconds = 7200  # 2 Hours
+
+# ==========================================
+# HELPER FUNCTIONS & CHECKS
+# ==========================================
+def is_admin_or_owner():
     async def predicate(ctx):
-        if ctx.author.id == ctx.guild.owner_id:
+        if ctx.author.id == ctx.guild.owner_id or ctx.author.guild_permissions.administrator:
             return True
-        if ctx.author.guild_permissions.administrator:
+        raise commands.CheckFailure("Only the Server Owner or an Administrator can perform this action.")
+    return commands.check(predicate)
+
+def is_admin_or_higher():
+    async def predicate(ctx):
+        if ctx.author.id == ctx.guild.owner_id or ctx.author.guild_permissions.administrator:
             return True
         user_roles = [r.name.lower() for r in ctx.author.roles]
-        if any(role_name in user_roles for role_name in PURGE_ALLOWED_ROLES):
+        if any(role_name in user_roles for role_name in RESTRICTED_ADMIN_ROLES):
             return True
         raise commands.CheckFailure("You do not have permission to run this command.")
     return commands.check(predicate)
@@ -79,13 +103,53 @@ def get_xp_for_level(level):
         return BASE_XP_LEVEL_1 * (2 ** (MAX_LEVEL - 2))
     return BASE_XP_LEVEL_1 * (2 ** (level - 1))
 
+def get_tier_info_for_level(level):
+    for (min_lvl, max_lvl), tier_data in LEVEL_TIER_ROLES.items():
+        if min_lvl <= level <= max_lvl:
+            return tier_data
+    return LEVEL_TIER_ROLES[(1, 9)]
+
+async def ensure_role_exists(guild, role_name, color):
+    role = discord.utils.get(guild.roles, name=role_name)
+    if not role:
+        try:
+            role = await guild.create_role(name=role_name, color=color, reason="Auto System Setup")
+        except discord.Forbidden:
+            return None
+    return role
+
+async def update_member_level_role(member, new_level):
+    guild = member.guild
+    tier_info = get_tier_info_for_level(new_level)
+    target_role_name = tier_info["name"]
+    target_color = tier_info["color"]
+
+    target_role = await ensure_role_exists(guild, target_role_name, target_color)
+    if not target_role:
+        return
+
+    all_tier_names = [data["name"] for data in LEVEL_TIER_ROLES.values()]
+    roles_to_remove = [r for r in member.roles if r.name in all_tier_names and r.name != target_role_name]
+
+    if roles_to_remove:
+        try:
+            await member.remove_roles(*roles_to_remove)
+        except discord.Forbidden:
+            pass
+
+    if target_role not in member.roles:
+        try:
+            await member.add_roles(target_role)
+        except discord.Forbidden:
+            pass
+
+# ==========================================
+# DYNAMIC CHANNEL MANAGEMENT
+# ==========================================
 async def get_or_create_announcement_channel(guild):
-    """Fetches or automatically creates a dedicated #level-announcements channel."""
     global ANNOUNCEMENT_CHANNEL_ID
-    if ANNOUNCEMENT_CHANNEL_ID:
-        channel = guild.get_channel(ANNOUNCEMENT_CHANNEL_ID)
-        if channel:
-            return channel
+    if ANNOUNCEMENT_CHANNEL_ID and guild.get_channel(ANNOUNCEMENT_CHANNEL_ID):
+        return guild.get_channel(ANNOUNCEMENT_CHANNEL_ID)
 
     for channel in guild.text_channels:
         if channel.name.lower() in ["announcements", "level-announcements", "level-ups"]:
@@ -93,20 +157,17 @@ async def get_or_create_announcement_channel(guild):
             return channel
 
     try:
-        new_channel = await guild.create_text_channel("level-announcements")
-        ANNOUNCEMENT_CHANNEL_ID = new_channel.id
-        await new_channel.send("📢 **Leveling Announcements Channel Initialized!** All member levels and updates will broadcast here.")
-        return new_channel
+        new_ch = await guild.create_text_channel("level-announcements")
+        ANNOUNCEMENT_CHANNEL_ID = new_ch.id
+        await new_ch.send("📢 **Leveling Announcements Channel Initialized!**")
+        return new_ch
     except discord.Forbidden:
         return None
 
 async def get_or_create_bot_commands_channel(guild):
-    """Fetches or automatically creates the #bot-commands channel for guides and updates."""
     global BOT_COMMANDS_CHANNEL_ID
-    if BOT_COMMANDS_CHANNEL_ID:
-        channel = guild.get_channel(BOT_COMMANDS_CHANNEL_ID)
-        if channel:
-            return channel
+    if BOT_COMMANDS_CHANNEL_ID and guild.get_channel(BOT_COMMANDS_CHANNEL_ID):
+        return guild.get_channel(BOT_COMMANDS_CHANNEL_ID)
 
     for channel in guild.text_channels:
         if channel.name.lower() in ["bot-commands", "bot_commands", "team-guide", "team_guide"]:
@@ -114,19 +175,17 @@ async def get_or_create_bot_commands_channel(guild):
             return channel
 
     try:
-        new_channel = await guild.create_text_channel("bot-commands")
-        BOT_COMMANDS_CHANNEL_ID = new_channel.id
-        await new_channel.send("🤖 **Bot Commands & Team Guide Channel Initialized!** Command logs and guides are managed here.")
-        return new_channel
+        new_ch = await guild.create_text_channel("bot-commands")
+        BOT_COMMANDS_CHANNEL_ID = new_ch.id
+        await new_ch.send("🤖 **Bot Commands Channel Initialized!**")
+        return new_ch
     except discord.Forbidden:
         return None
 
 async def get_or_create_bump_channel(guild):
     global BUMP_CHANNEL_ID
-    if BUMP_CHANNEL_ID:
-        channel = guild.get_channel(BUMP_CHANNEL_ID)
-        if channel:
-            return channel
+    if BUMP_CHANNEL_ID and guild.get_channel(BUMP_CHANNEL_ID):
+        return guild.get_channel(BUMP_CHANNEL_ID)
 
     for channel in guild.text_channels:
         if channel.name.lower() == "bump":
@@ -134,437 +193,61 @@ async def get_or_create_bump_channel(guild):
             return channel
 
     try:
-        new_channel = await guild.create_text_channel("bump")
-        BUMP_CHANNEL_ID = new_channel.id
-        await new_channel.send("🚀 **Dedicated Bump Channel Initialized!** Use `.bump` here to boost the server.")
-        return new_channel
+        new_ch = await guild.create_text_channel("bump")
+        BUMP_CHANNEL_ID = new_ch.id
+        await new_ch.send("🚀 **Bump Channel Initialized!** Use `.bump` here.")
+        return new_ch
     except discord.Forbidden:
         return None
 
-async def add_xp(user, amount, guild, fallback_channel):
-    user_id = user.id
-    current_level = user_levels.get(user_id, 1)
+async def get_or_create_memory_channel(guild):
+    global BOT_MEMORY_CHANNEL_ID
+    if BOT_MEMORY_CHANNEL_ID and guild.get_channel(BOT_MEMORY_CHANNEL_ID):
+        return guild.get_channel(BOT_MEMORY_CHANNEL_ID)
 
-    if current_level >= MAX_LEVEL:
-        return
-
-    current_xp = user_xp.get(user_id, 0) + amount
-    user_xp[user_id] = current_xp
-
-    xp_needed = get_xp_for_level(current_level)
-
-    if current_xp >= xp_needed:
-        new_level = min(current_level + 1, MAX_LEVEL)
-        user_levels[user_id] = new_level
-        
-        target_channel = await get_or_create_announcement_channel(guild) or fallback_channel
-        if target_channel:
-            await target_channel.send(
-                f"🎉 **[LEVEL UP]** {user.mention} has gained enough XP and is now **Level {new_level}**!"
-            )
-
-# Events
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user.name}")
-    print(f"Created by {BOT_CREATOR_USERNAME} ({BOT_CREATOR_REAL_NAME}) - {BOT_COMPANY_NAME}")
-    
-    for guild in bot.guilds:
-        await get_or_create_bump_channel(guild)
-        await get_or_create_bot_commands_channel(guild)
-        announcement_channel = await get_or_create_announcement_channel(guild)
-
-        # SCAN OLD MEMBERS ON STARTUP
-        newly_added_members = 0
-        for member in guild.members:
-            if not member.bot and member.id not in user_levels:
-                user_levels[member.id] = 1
-                user_xp[member.id] = 0
-                newly_added_members += 1
-
-        if newly_added_members > 0 and announcement_channel:
-            await announcement_channel.send(
-                f"⚙️ **System Sync Complete**: Synchronized **{newly_added_members} existing server members** into the leveling system! All existing members have been started at **Level 1 (0 XP)**."
-            )
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CheckFailure):
-        await ctx.send("❌ **Access Denied**: Only the Server Owner, Administrators, Head Moderators, or Authority can use this command.")
-    else:
-        raise error
-
-@bot.event
-async def on_member_join(member):
-    user_levels[member.id] = 1
-    user_xp[member.id] = 0
-
-    newbie_role = discord.utils.get(member.guild.roles, name=NEW_MEMBER_ROLE)
-    if newbie_role:
-        await member.add_roles(newbie_role)
-
-    target_channel = await get_or_create_announcement_channel(member.guild) or member.guild.system_channel
-    if target_channel:
-        await target_channel.send(
-            f" Welcome to the server, {member.mention}! You have been assigned the **{NEW_MEMBER_ROLE}** role and automatically started at **Level 1**."
-        )
-
-@bot.event
-async def on_message(message):
-    if message.author.id == bot.user.id or message.author.bot or not message.guild:
-        return
-
-    # 1. AUTO-REMOVE AFK STATUS (Runs FIRST before any commands or XP checks)
-    if message.author.id in afk_users and not message.content.startswith(".afk"):
-        del afk_users[message.author.id]
-        welcome_msg = f"👋 Welcome back, {message.author.mention}! Your AFK status has been removed."
-        
-        if message.author.id in afk_mentions and afk_mentions[message.author.id]:
-            missed = "\n".join(afk_mentions[message.author.id][-5:])
-            welcome_msg += f"\n\n📬 **While you were away, you received these mentions:**\n{missed}"
-            del afk_mentions[message.author.id]
-
-        await message.channel.send(welcome_msg)
-
-    # 2. Award XP for active messaging
-    await add_xp(message.author, 15, message.guild, message.channel)
-
-    bump_channel = await get_or_create_bump_channel(message.guild)
-
-    # 3. Detect Disboard Bump Success ONLY inside the dedicated bump channel
-    if bump_channel and message.channel.id == bump_channel.id:
-        if message.author.id == DISBOARD_BOT_ID and message.embeds:
-            for embed in message.embeds:
-                description = embed.description or ""
-                if "Bump done" in description:
-                    global last_bump_time
-                    current_time = asyncio.get_event_loop().time()
-                    time_passed = current_time - last_bump_time
-
-                    if last_bump_time != 0 and time_passed < bump_cooldown_seconds:
-                        remaining_seconds = int(bump_cooldown_seconds - time_passed)
-                        minutes, seconds = divmod(remaining_seconds, 60)
-                        hours, minutes = divmod(minutes, 60)
-                        await message.channel.send(
-                            f"⚠️ **Bump Cooldown Active**: No XP awarded! Please wait **{hours}h {minutes}m {seconds}s** until the next bump notification."
-                        )
-                        return
-
-                    last_bump_time = current_time
-                    bumper = message.interaction.user if message.interaction else None
-                    cute_line = random.choice(CUTE_BUMP_MESSAGES)
-
-                    if bumper:
-                        await add_xp(bumper, 200, message.guild, message.channel)
-                        await message.channel.send(f"Thank you for bumping, {bumper.mention}! You earned **200 XP**.\n*{cute_line}*")
-                    else:
-                        await message.channel.send(f"Thank you for bumping! You earned **200 XP**.\n*{cute_line}*")
-
-                    await message.channel.send("I will notify everyone in this channel to bump again in 2 hours!")
-                    await asyncio.sleep(bump_cooldown_seconds)
-                    await message.channel.send("⏰ **Time to bump!** Use `.bump` or Disboard to boost the server again!")
-
-    # 4. AFK Mention Notification Collection
-    if message.mentions:
-        for mention in message.mentions:
-            if mention.id in afk_users and mention.id != message.author.id:
-                reason = afk_users[mention.id]
-                if mention.id not in afk_mentions:
-                    afk_mentions[mention.id] = []
-                afk_mentions[mention.id].append(f"From {message.author.display_name} in {message.channel.mention}: {message.content}")
-                await message.channel.send(f"ℹ️ {mention.display_name} is currently AFK: **{reason}**")
-
-    await bot.process_commands(message)
-
-# Commands
-@bot.command(name="botcommands")
-@is_admin_or_higher()
-async def bot_commands(ctx):
-    """Team guide listing all available bot commands. Restricted to #bot-commands / #team-guide and privileged roles."""
-    target_channel = await get_or_create_bot_commands_channel(ctx.guild)
-    
-    if target_channel and ctx.channel.id != target_channel.id:
-        await ctx.send(f"❌ This team guide command can only be run inside {target_channel.mention}!")
-        return
-
-    embed = discord.Embed(
-        title="📜 Team Guide & Bot Commands Directory",
-        description="Here is the complete command guide for staff and management:",
-        color=discord.Color.gold(),
-        timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-
-    embed.add_field(
-        name="🛠️ Management & Administration Commands",
-        value=(
-            "`.botcommands` - Displays this team guide (Restricted to #bot-commands).\n"
-            "`.synclevels` - Scans server and syncs unindexed members to Level 1.\n"
-            "`.update <details>` - Broadcasts a bot update embed to #bot-commands.\n"
-            "`.purge <1-100>` - Deletes a specified amount of messages.\n"
-            "`.setup_bump` - Validates or creates the dedicated #bump channel.\n"
-            "`.setup_announcements` - Validates or creates #level-announcements."
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="🛡️ Moderation Commands",
-        value=(
-            "`.mute @user <reason>` - Times out a user (1h, 6h, 12h scaling).\n"
-            "`.unmute @user` - Removes timeout/mute status from a member.\n"
-            "`.warn @user <reason>` - Warns a user (Auto-bans on 3rd warning).\n"
-            "`.clearwarns @user` - Clears warning history for a user.\n"
-            "`.kick @user <reason>` - Kicks a user from the server.\n"
-            "`.ban @user <reason>` - Bans a user from the server."
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="💬 General & Utility Commands",
-        value=(
-            "`.level [@user]` - Displays current level and XP.\n"
-            "`.bump` - Bumps the server for +200 XP (Locked to #bump).\n"
-            "`.afk <reason>` - Sets your AFK state and records mentions.\n"
-            "`.color <color_name>` - Assigns a Pro Hex color role.\n"
-            "`.about` - Displays bot author metadata and developer credits."
-        ),
-        inline=False
-    )
-
-    embed.set_footer(
-        text=f"Authorized Staff Only • Developed by {BOT_CREATOR_USERNAME} ({BOT_COMPANY_NAME})",
-        icon_url=ctx.author.display_avatar.url
-    )
-
-    await ctx.send(embed=embed)
-
-@bot.command(name="update")
-@is_admin_or_higher()
-async def bot_update(ctx, *, update_details: str):
-    target_channel = await get_or_create_bot_commands_channel(ctx.guild)
-    if not target_channel:
-        await ctx.send("❌ Could not find or create the `#bot-commands` channel. Check my server permissions.")
-        return
-
-    update_embed = discord.Embed(
-        title="⚙️ Bot Update Announcement",
-        description=f"{update_details}\n\n*Created by {BOT_CREATOR_USERNAME} ({BOT_CREATOR_REAL_NAME}) | {BOT_COMPANY_NAME}*",
-        color=discord.Color.blue(),
-        timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-    update_embed.set_footer(text=f"Updated by {ctx.author.display_name} • Powered by {BOT_COMPANY_NAME}", icon_url=ctx.author.display_avatar.url)
-
-    await target_channel.send(embed=update_embed)
-    await ctx.send(f"✅ Update notification successfully posted in {target_channel.mention}!")
-
-@bot.command(name="afk")
-async def afk(ctx, *, reason="AFK"):
-    afk_users[ctx.author.id] = reason
-    await ctx.send(f"💤 {ctx.author.mention}, I set your AFK status to: **{reason}**")
-
-@bot.command(name="synclevels")
-@is_admin_or_higher()
-async def sync_levels(ctx):
-    """Manually scans and adds any missing server members to the leveling system."""
-    announcement_channel = await get_or_create_announcement_channel(ctx.guild)
-    newly_added = 0
-
-    for member in ctx.guild.members:
-        if not member.bot and member.id not in user_levels:
-            user_levels[member.id] = 1
-            user_xp[member.id] = 0
-            newly_added += 1
-
-    if newly_added > 0:
-        msg = f"✅ Synchronized **{newly_added} member(s)** into the leveling system at **Level 1 (0 XP)**!"
-        await ctx.send(msg)
-        if announcement_channel and announcement_channel.id != ctx.channel.id:
-            await announcement_channel.send(f"⚙️ **Manual Sync**: {msg}")
-    else:
-        await ctx.send("👍 All server members are already registered in the leveling system.")
-
-@bot.command(name="about")
-async def about_bot(ctx):
-    """Displays information about the bot creator and developer."""
-    embed = discord.Embed(
-        title="🤖 Bot Information",
-        color=discord.Color.purple(),
-        timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-    embed.add_field(name="Creator Username", value=BOT_CREATOR_USERNAME, inline=True)
-    embed.add_field(name="Developer Real Name", value=BOT_CREATOR_REAL_NAME, inline=True)
-    embed.add_field(name="Company", value=BOT_COMPANY_NAME, inline=True)
-    embed.set_footer(text=f"Created by {BOT_CREATOR_USERNAME} | {BOT_COMPANY_NAME}")
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def bump(ctx):
-    bump_channel = await get_or_create_bump_channel(ctx.guild)
-
-    if bump_channel and ctx.channel.id != bump_channel.id:
-        await ctx.send(f"❌ The `.bump` command can only be used in {bump_channel.mention}!")
-        return
-
-    global last_bump_time
-    current_time = asyncio.get_event_loop().time()
-    time_passed = current_time - last_bump_time
-
-    if last_bump_time != 0 and time_passed < bump_cooldown_seconds:
-        remaining_seconds = int(bump_cooldown_seconds - time_passed)
-        minutes, seconds = divmod(remaining_seconds, 60)
-        hours, minutes = divmod(minutes, 60)
-        await ctx.send(f"❌ **No XP Awarded**: Bump cooldown active! Please wait **{hours}h {minutes}m {seconds}s** until the next bump notification.")
-        return
-
-    last_bump_time = current_time
-    await add_xp(ctx.author, 200, ctx.guild, ctx.channel)
-    
-    cute_line = random.choice(CUTE_BUMP_MESSAGES)
-    await ctx.send(f"Thank you for bumping, {ctx.author.mention}! (**+200 XP**)\n*{cute_line}*\n\nI will notify everyone in this channel to bump again in 2 hours!")
-    
-    await asyncio.sleep(bump_cooldown_seconds)
-    await ctx.send("⏰ **Time to bump!** Use `.bump` to boost the server again!")
-
-@bot.command()
-@is_admin_or_higher()
-async def purge(ctx, amount: int):
-    if amount < 1 or amount > 100:
-        await ctx.send("❌ Please specify a number of messages to purge between **1 and 100**.")
-        return
-
-    deleted = await ctx.channel.purge(limit=amount + 1)
-    confirm_msg = await ctx.send(f"🧹 Successfully purged **{len(deleted) - 1}** messages.")
-    await asyncio.sleep(3)
-    await confirm_msg.delete()
-
-@bot.command()
-async def setup_bump(ctx):
-    channel = await get_or_create_bump_channel(ctx.guild)
-    if channel:
-        await ctx.send(f"✅ Dedicated bump channel is active at {channel.mention}!")
-    else:
-        await ctx.send("❌ Failed to set up the bump channel. Check my server permissions.")
-
-@bot.command()
-async def setup_announcements(ctx):
-    channel = await get_or_create_announcement_channel(ctx.guild)
-    if channel:
-        await ctx.send(f"✅ Leveling announcements channel is configured to {channel.mention}!")
-    else:
-        await ctx.send("❌ Failed to create channel. Please check my server permissions.")
-
-@bot.command()
-async def color(ctx, *, color_name: str):
-    matched_role_name = None
-    for valid_color in PRO_HEX_COLORS:
-        if color_name.lower() in valid_color.lower():
-            matched_role_name = valid_color
-            break
-
-    if not matched_role_name:
-        available = ", ".join(PRO_HEX_COLORS)
-        await ctx.send(f"Invalid color choice. Available options: {available}")
-        return
-
-    role = discord.utils.get(ctx.guild.roles, name=matched_role_name)
-    if not role:
-        await ctx.send(f"The role `{matched_role_name}` does not exist on this server yet.")
-        return
-
-    roles_to_remove = [r for r in ctx.author.roles if r.name in PRO_HEX_COLORS]
-    if roles_to_remove:
-        await ctx.author.remove_roles(*roles_to_remove)
-
-    await ctx.author.add_roles(role)
-    await ctx.send(f"Successfully applied the {role.name} color role to you!")
-
-# Moderation Commands
-@bot.command()
-@commands.has_permissions(moderate_members=True)
-async def mute(ctx, member: discord.Member, *, reason="No reason provided"):
-    if member.bot:
-        await ctx.send("You cannot mute bots.")
-        return
-
-    user_id = member.id
-    current_mutes = user_mute_counts.get(user_id, 0) + 1
-    user_mute_counts[user_id] = current_mutes
-
-    if current_mutes == 1:
-        duration = datetime.timedelta(hours=1)
-        duration_label = "1 hour"
-    elif current_mutes == 2:
-        duration = datetime.timedelta(hours=6)
-        duration_label = "6 hours"
-    else:
-        duration = datetime.timedelta(hours=12)
-        duration_label = "12 hours"
+    for channel in guild.text_channels:
+        if channel.name.lower() == "bot-memory":
+            BOT_MEMORY_CHANNEL_ID = channel.id
+            return channel
 
     try:
-        await member.timeout(duration, reason=reason)
-        await ctx.send(
-            f"🔇 {member.mention} has been muted for **{duration_label}** (Mute #{current_mutes}). Reason: {reason}"
-        )
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+        new_ch = await guild.create_text_channel("bot-memory", overwrites=overwrites)
+        BOT_MEMORY_CHANNEL_ID = new_ch.id
+        await new_ch.send("💾 **Bot Memory Channel Created.** Dynamic database points will automatically record here.")
+        return new_ch
     except discord.Forbidden:
-        await ctx.send("❌ I don't have permission to timeout/mute this user.")
+        return None
 
-@bot.command()
-@commands.has_permissions(moderate_members=True)
-async def unmute(ctx, member: discord.Member):
-    try:
-        await member.timeout(None)
-        await ctx.send(f"🔊 {member.mention} has been unmuted.")
-    except discord.Forbidden:
-        await ctx.send("❌ I don't have permission to unmute this user.")
-
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def warn(ctx, member: discord.Member, *, reason="No reason provided"):
-    if member.bot:
-        await ctx.send("You cannot warn bots.")
+# ==========================================
+# DATABASE BACKUP & RECOVERY ENGINE
+# ==========================================
+async def save_data_to_channel(guild):
+    memory_channel = await get_or_create_memory_channel(guild)
+    if not memory_channel:
         return
 
-    user_id = member.id
-    current_warns = user_warnings.get(user_id, 0) + 1
-    user_warnings[user_id] = current_warns
+    data = {
+        "user_xp": {str(k): v for k, v in user_xp.items()},
+        "user_levels": {str(k): v for k, v in user_levels.items()},
+        "user_warnings": {str(k): v for k, v in user_warnings.items()},
+        "user_mute_counts": {str(k): v for k, v in user_mute_counts.items()},
+        "afk_users": {str(k): v for k, v in afk_users.items()}
+    }
 
-    await ctx.send(f"⚠️ {member.mention} has been warned! **Warning {current_warns}/3**. Reason: {reason}")
+    json_payload = f"```json\n{json.dumps(data, indent=2)}\n```"
+    await memory_channel.send(f"💾 **[AUTO-SAVE DATABASE SYNC]**\n{json_payload}")
 
-    if current_warns >= 3:
-        user_warnings[user_id] = 0
-        auto_ban_reason = f"Automated Ban: Reached 3/3 warnings. Last warning reason: {reason}"
-        await member.ban(reason=auto_ban_reason)
-        await ctx.send(f"🔨 **AUTOMATIC BAN**: {member.mention} has reached 3 warnings and was automatically banned!")
+async def restore_data_from_channel(guild):
+    global user_xp, user_levels, user_warnings, user_mute_counts, afk_users
+    memory_channel = await get_or_create_memory_channel(guild)
+    if not memory_channel:
+        return False
 
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def clearwarns(ctx, member: discord.Member):
-    user_warnings[member.id] = 0
-    await ctx.send(f"✅ Cleared all warnings for {member.mention}.")
-
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
-    await member.kick(reason=reason)
-    await ctx.send(f"{member.mention} has been kicked. Reason: {reason}")
-
-@bot.command()
-@commands.has_permissions(ban_members=True)
-async def ban(ctx, member: discord.Member, *, reason="No reason provided"):
-    await member.ban(reason=reason)
-    await ctx.send(f"🔨 {member.mention} has been banned by {ctx.author.mention}. Violation Reason: **{reason}**")
-
-@bot.command()
-async def level(ctx, member: discord.Member = None):
-    target = member or ctx.author
-    lvl = user_levels.get(target.id, 1)
-    xp = user_xp.get(target.id, 0)
-    
-    if lvl >= MAX_LEVEL:
-        await ctx.send(f"{target.display_name} has reached the maximum **Level {MAX_LEVEL}**! ({xp} total XP).")
-    else:
-        needed = get_xp_for_level(lvl)
-        await ctx.send(f"{target.display_name} is Level **{lvl}** ({xp} / {needed} XP).")
-
-bot.run(os.getenv("DISCORD_TOKEN"))
+    async for message in memory_channel.history(limit=30):
+        if message.author.id == bot.user.id and "```json" in message.content:
+            try:
+                raw_json = message.content.split("
