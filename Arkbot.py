@@ -395,28 +395,43 @@ async def get_or_create_locked_ticket_category(guild: discord.Guild) -> discord.
     return cat
 
 async def get_or_create_memory_channel(guild: discord.Guild):
+    """Finds or creates #bot-memory and actively enforces history-reading permissions."""
     ch_id = bot_memory_channels.get(guild.id)
-    if ch_id and guild.get_channel(ch_id):
-        return guild.get_channel(ch_id)
+    channel = guild.get_channel(ch_id) if ch_id else None
 
-    channel = discord.utils.find(lambda c: c.name.lower() == "bot-memory", guild.text_channels)
+    if not channel:
+        channel = discord.utils.find(lambda c: c.name.lower() == "bot-memory", guild.text_channels)
+
+    desired_overwrites = {
+        guild.default_role: discord.PermissionOverwrite(read_messages=False, view_channel=False),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True,
+            read_messages=True,
+            read_message_history=True,
+            send_messages=True,
+            attach_files=True
+        )
+    }
+
     if channel:
         bot_memory_channels[guild.id] = channel.id
+        perms = channel.permissions_for(guild.me)
+        if not perms.read_message_history or not perms.view_channel:
+            try:
+                await channel.set_permissions(guild.me, overwrite=desired_overwrites[guild.me])
+            except discord.Forbidden:
+                pass
         return channel
 
     try:
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False, view_channel=False),
-            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, view_channel=True, attach_files=True)
-        }
-        new_ch = await guild.create_text_channel("bot-memory", overwrites=overwrites)
+        new_ch = await guild.create_text_channel("bot-memory", overwrites=desired_overwrites)
         bot_memory_channels[guild.id] = new_ch.id
         return new_ch
     except discord.Forbidden:
         return None
 
 # ==========================================
-# FILE-ATTACHMENT BACKUP ENGINE
+# FILE-ATTACHMENT BACKUP & RECOVERY ENGINE
 # ==========================================
 async def save_data_to_channel(guild: discord.Guild, keep_last: int = 3):
     memory_channel = await get_or_create_memory_channel(guild)
@@ -458,35 +473,140 @@ async def save_data_to_channel(guild: discord.Guild, keep_last: int = 3):
     except Exception as e:
         print(f"Error purging old backups for {guild.id}: {e}")
 
-async def restore_data_from_channel(guild: discord.Guild) -> int:
+async def purge_all_backups(guild: discord.Guild, keep_newest: int = 1) -> int:
     memory_channel = await get_or_create_memory_channel(guild)
     if not memory_channel:
         return 0
 
+    backup_messages = []
+    try:
+        async for msg in memory_channel.history(limit=100):
+            if msg.attachments and any(att.filename.lower().endswith(".json") for att in msg.attachments):
+                backup_messages.append(msg)
+
+        to_delete = backup_messages[keep_newest:] if keep_newest > 0 else backup_messages
+        deleted_count = 0
+
+        for msg in to_delete:
+            try:
+                await msg.delete()
+                deleted_count += 1
+                await asyncio.sleep(0.3)
+            except (discord.NotFound, discord.Forbidden):
+                pass
+
+        return deleted_count
+    except Exception as e:
+        print(f"Error purging backups for {guild.id}: {e}")
+        return 0
+
+async def restore_data_from_channel(guild: discord.Guild, target_attachment: discord.Attachment = None, target_index: int = None) -> int:
     gid = guild.id
-    async for message in memory_channel.history(limit=25):
-        if message.author.id == bot.user.id and message.attachments:
-            for attachment in message.attachments:
-                if attachment.filename.endswith(".json"):
-                    try:
-                        content = await attachment.read()
-                        data = json.loads(content.decode("utf-8"))
 
-                        user_xp[gid] = {int(k): v for k, v in data.get("user_xp", {}).items()}
-                        user_levels[gid] = {int(k): v for k, v in data.get("user_levels", {}).items()}
-                        user_warnings[gid] = {int(k): v for k, v in data.get("user_warnings", {}).items()}
-                        user_mute_counts[gid] = {int(k): v for k, v in data.get("user_mute_counts", {}).items()}
-                        afk_users[gid] = {int(k): v for k, v in data.get("afk_users", {}).items()}
-                        user_birthdays[gid] = {int(k): v for k, v in data.get("user_birthdays", {}).items()}
-                        last_anniversary_awarded[gid] = {int(k): v for k, v in data.get("last_anniversary", {}).items()}
-                        confession_counters[gid] = data.get("confession_counter", 0)
-                        last_bump_times[gid] = data.get("last_bump_time", 0.0)
+    def parse_payload(data: dict) -> tuple[dict, int, int]:
+        if not isinstance(data, dict):
+            return {}, 0, 0
 
-                        return len(user_levels[gid])
-                    except Exception as e:
-                        print(f"Failed to restore snapshot: {e}")
-                        return 0
-    return 0
+        raw_levels = data.get("user_levels") or data.get("levels") or {}
+        raw_xp = data.get("user_xp") or data.get("xp") or {}
+        raw_warns = data.get("user_warnings") or data.get("warnings") or {}
+        raw_mutes = data.get("user_mute_counts") or data.get("mutes") or {}
+        raw_afk = data.get("afk_users") or data.get("afk") or {}
+        raw_bdays = data.get("user_birthdays") or data.get("birthdays") or {}
+        raw_anni = data.get("last_anniversary") or data.get("anniversaries") or {}
+
+        parsed_levels = {int(k): int(v) for k, v in raw_levels.items() if str(k).isdigit()}
+        parsed_xp = {int(k): int(v) for k, v in raw_xp.items() if str(k).isdigit()}
+
+        if not parsed_levels and not parsed_xp:
+            return {}, 0, 0
+
+        total_xp = sum(parsed_xp.values())
+        highest_lvl = max(parsed_levels.values()) if parsed_levels else 1
+
+        clean_dict = {
+            "levels": parsed_levels,
+            "xp": parsed_xp,
+            "warnings": {int(k): int(v) for k, v in raw_warns.items() if str(k).isdigit()},
+            "mutes": {int(k): int(v) for k, v in raw_mutes.items() if str(k).isdigit()},
+            "afk": {int(k): str(v) for k, v in raw_afk.items() if str(k).isdigit()},
+            "birthdays": {int(k): v for k, v in raw_bdays.items() if str(k).isdigit()},
+            "anniversary": {int(k): int(v) for k, v in raw_anni.items() if str(k).isdigit()},
+            "confession_counter": data.get("confession_counter", 0),
+            "last_bump_time": data.get("last_bump_time", 0.0),
+            "total_xp": total_xp,
+            "highest_lvl": highest_lvl
+        }
+        return clean_dict, len(parsed_levels), total_xp
+
+    def apply_data(clean: dict):
+        user_levels[gid] = clean["levels"]
+        user_xp[gid] = clean["xp"]
+        user_warnings[gid] = clean["warnings"]
+        user_mute_counts[gid] = clean["mutes"]
+        afk_users[gid] = clean["afk"]
+        user_birthdays[gid] = clean["birthdays"]
+        last_anniversary_awarded[gid] = clean["anniversary"]
+        confession_counters[gid] = clean["confession_counter"]
+        last_bump_times[gid] = clean["last_bump_time"]
+
+    if target_attachment:
+        try:
+            content = await target_attachment.read()
+            clean, count, _ = parse_payload(json.loads(content.decode("utf-8")))
+            if count > 0:
+                apply_data(clean)
+                return count
+        except Exception as e:
+            print(f"Failed parsing direct attachment: {e}")
+            return 0
+
+    memory_channel = await get_or_create_memory_channel(guild)
+    if not memory_channel:
+        return 0
+
+    candidate_backups = []
+
+    try:
+        async for message in memory_channel.history(limit=150):
+            if message.attachments:
+                for att in message.attachments:
+                    if att.filename.lower().endswith(".json"):
+                        try:
+                            content = await att.read()
+                            clean, count, total_xp = parse_payload(json.loads(content.decode("utf-8")))
+                            if count > 0:
+                                candidate_backups.append({
+                                    "clean": clean,
+                                    "count": count,
+                                    "total_xp": total_xp,
+                                    "created_at": message.created_at,
+                                    "filename": att.filename
+                                })
+                        except Exception:
+                            continue
+    except discord.Forbidden:
+        print(f"Missing history permissions in #{memory_channel.name}")
+        return 0
+
+    if not candidate_backups:
+        return 0
+
+    if target_index is not None and 0 <= target_index < len(candidate_backups):
+        chosen = candidate_backups[target_index]
+        apply_data(chosen["clean"])
+        return chosen["count"]
+
+    # Priority 1: Pick latest backup with actual progression (XP > 0 or Level > 1)
+    for bkp in candidate_backups:
+        if bkp["total_xp"] > 0 or bkp["clean"]["highest_lvl"] > 1:
+            apply_data(bkp["clean"])
+            return bkp["count"]
+
+    # Priority 2: Fallback to newest available file
+    chosen = candidate_backups[0]
+    apply_data(chosen["clean"])
+    return chosen["count"]
 
 # ==========================================
 # BACKGROUND SCHEDULED LOOPS
@@ -934,6 +1054,55 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
     await ticket_ch.send(content=f"{user.mention} {staff_ping_text}".strip(), embed=embed, view=TicketControlView())
     await interaction.response.send_message(f"✅ **Ticket Created!** Go to {ticket_ch.mention}.", ephemeral=True)
 
+async def build_and_send_ticket(guild: discord.Guild, user: discord.Member, topic: str = "General Inquiry") -> discord.TextChannel:
+    category = await get_or_create_ticket_category(guild)
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False),
+        user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_channels=True, manage_messages=True)
+    }
+
+    staff_perms = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True)
+    if guild.owner:
+        overwrites[guild.owner] = staff_perms
+
+    staff_mentions = []
+    for role in guild.roles:
+        if role.name.lower() == "authority" or role.permissions.administrator or role.name.lower() in ["admin", "administrator"]:
+            overwrites[role] = staff_perms
+            staff_mentions.append(role.mention)
+
+    clean_username = "".join(c for c in user.name.lower() if c.isalnum())[:10]
+    channel_name = f"🎫・ticket-{clean_username}"
+
+    ticket_ch = await guild.create_text_channel(
+        name=channel_name,
+        category=category,
+        overwrites=overwrites,
+        topic=f"Owner ID: {user.id} | Subject: {topic}"
+    )
+
+    embed = discord.Embed(
+        title="🎫 Support Ticket Opened",
+        description=(
+            f"Hello {user.mention}, thank you for reaching out!\n\n"
+            f"📌 **Subject / Reason:**\n> {topic}\n\n"
+            "💬 **Instructions:**\n"
+            "• Provide any relevant details, screenshots, or context below.\n"
+            "• Our leadership team has been alerted and will respond shortly.\n\n"
+            "🔒 *This ticket is completely private between you, Authority, and Administrators.*"
+        ),
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=user.display_avatar.url)
+    embed.set_footer(text=f"Ticket Owner: {user.display_name} • Click buttons below to manage")
+
+    ping_header = f"{user.mention} " + " ".join(set(staff_mentions))
+    await ticket_ch.send(content=ping_header.strip(), embed=embed, view=TicketControlView())
+    return ticket_ch
+
 class TicketLauncherView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -1037,7 +1206,8 @@ async def publish_or_update_botcommands(guild: discord.Guild, update_note: str =
     embed.add_field(
         name="🎫 Private Support Tickets (#tickets)",
         value=(
-            "`.ticketpanel` — Spawn the private support panel.\n"
+            "`.ticketpanel` — Spawn the interactive support panel.\n"
+            "`.createticket [reason]` — Manually open a dedicated ticket channel.\n"
             "• **💼 Join Team** — Private staff/moderator application.\n"
             "• **⚠️ File Complaint** — Report a user or server violation.\n"
             "• **❓ General Support** — Inquiries & general assistance.\n"
@@ -1100,7 +1270,9 @@ async def publish_or_update_botcommands(guild: discord.Guild, update_note: str =
         name="💾 System & Maintenance Engine",
         value=(
             "`.savedata` — Save snapshot to `#bot-memory` (retains newest 3, deletes older).\n"
-            "`.restoredata` — Overwrite active memory with latest JSON backup.\n"
+            "`.restoredata [index]` — Safe smart restore (auto-skips 0-XP snapshots).\n"
+            "`.backups` — List all historical backups in `#bot-memory` with index IDs.\n"
+            "`.cleanbackups [keep]` — Delete old/duplicate backup messages from `#bot-memory`.\n"
             "`.maintenance on/off` — Freeze activity and secure state for bot updates.\n"
             "`.restart` — Safe pre-backup snapshot & in-place bot process reboot.\n"
             "`.botcommands [note]` — Refresh manual directory & purge outdated post."
@@ -1617,6 +1789,13 @@ async def post_ticket_panel(ctx):
     except discord.Forbidden:
         pass
 
+@bot.command(name="createticket", aliases=["openticket", "newticket"])
+async def manual_create_ticket(ctx, member: discord.Member = None, *, reason: str = "General Inquiry"):
+    target_user = member if (member and ctx.author.guild_permissions.administrator) else ctx.author
+    status_msg = await ctx.send(f"⏳ Creating ticket channel for {target_user.mention}...")
+    ticket_ch = await build_and_send_ticket(ctx.guild, target_user, topic=reason)
+    await status_msg.edit(content=f"✅ **Ticket Created!** Go to {ticket_ch.mention}.")
+
 @bot.command(name="confesspanel")
 @is_admin_or_owner()
 async def post_confession_panel(ctx):
@@ -2012,7 +2191,7 @@ async def warn(ctx, member: discord.Member, *, reason: str = "No reason specifie
             await member.ban(reason=f"Reached 3 warnings. Latest: {reason}")
             await ctx.send(f"🔨 **AUTO-BAN EXECUTION**: {member.mention} reached 3 strikes.")
         except discord.Forbidden:
-            await ctx.send(f"❌ Failed to auto-ban {member.mention}: Missing clearance.")
+            await ctx.send("❌ Failed to auto-ban {member.mention}: Missing clearance.")
 
 @bot.command(name="clearwarns")
 @commands.has_permissions(kick_members=True)
@@ -2129,33 +2308,98 @@ async def force_save(ctx):
     await save_data_to_channel(ctx.guild)
     await ctx.send("💾 State snapshot safely committed to `#bot-memory`.")
 
+@bot.command(name="backups", aliases=["backuplist"])
+@is_admin_or_owner()
+async def list_available_backups(ctx):
+    memory_channel = await get_or_create_memory_channel(ctx.guild)
+    if not memory_channel:
+        return await ctx.send("❌ Channel `#bot-memory` not found.")
+
+    found_backups = []
+    async for msg in memory_channel.history(limit=100):
+        for att in msg.attachments:
+            if att.filename.lower().endswith(".json"):
+                found_backups.append((msg.created_at, att.filename, msg.author.display_name))
+
+    if not found_backups:
+        return await ctx.send("ℹ️ No JSON backup files located in `#bot-memory`.")
+
+    embed = discord.Embed(
+        title="💾 Available Server Backups",
+        description="To restore a specific backup, run `.restoredata <Index>` (e.g., `.restoredata 0` for newest).",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+
+    for idx, (created, fname, author) in enumerate(found_backups[:10]):
+        unix = int(created.timestamp())
+        embed.add_field(
+            name=f"[{idx}] {fname}",
+            value=f"📅 <t:{unix}:f> (<t:{unix}:R>)\n👤 Uploaded by: `{author}`",
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="cleanbackups", aliases=["purgebackups", "clearbackups"])
+@is_admin_or_owner()
+async def clean_old_backups(ctx, keep_newest: int = 1):
+    status = await ctx.send(f"🧹 Scanning `#bot-memory` to purge old backups (keeping newest: {keep_newest})...")
+    deleted = await purge_all_backups(ctx.guild, keep_newest=keep_newest)
+    await status.edit(content=f"✅ **Cleaned `#bot-memory`**: Deleted **{deleted}** obsolete backup message(s).")
+
 @bot.command(name="restoredata", aliases=["loaddata", "recoverdata"])
 @is_admin_or_owner()
-async def force_restore_data(ctx):
+async def force_restore_data(ctx, backup_index: int = None):
+    uploaded_file = ctx.message.attachments[0] if ctx.message.attachments else None
+
+    target_desc = (
+        f"attached file **`{uploaded_file.filename}`**" if uploaded_file
+        else (f"backup snapshot at index **`[{backup_index}]`**" if backup_index is not None
+        else "the latest valid backup containing progression data in `#bot-memory`")
+    )
+
     view = RestoreConfirmView(ctx)
     embed = discord.Embed(
         title="⚠️ Database Recovery Confirmation",
-        description="Restoring will **overwrite all live session data** with the latest snapshot in `#bot-memory`.\n\nDo you want to proceed?",
+        description=(
+            f"Restoring will overwrite current session data from {target_desc}.\n\n"
+            "• All XP, levels, warnings, birthdays, and anniversaries will be updated.\n"
+            "• Old, duplicate files in `#bot-memory` will be cleaned.\n\n"
+            "Do you want to proceed?"
+        ),
         color=discord.Color.red()
     )
-    embed.set_footer(text="Prompt expires in 30 seconds.")
     prompt_msg = await ctx.send(embed=embed, view=view)
 
     await view.wait()
-
-    if view.value is None:
-        for child in view.children:
-            child.disabled = True
-        return await prompt_msg.edit(content="⏱️ **Confirmation Timed Out**: Restore aborted.", embed=None, view=view)
-
     if not view.value:
         return
 
-    restored_count = await restore_data_from_channel(ctx.guild)
+    restored_count = await restore_data_from_channel(
+        ctx.guild,
+        target_attachment=uploaded_file,
+        target_index=backup_index
+    )
+
     if restored_count > 0:
-        await prompt_msg.edit(content=f"♻️ **State Restored**: Indexed **{restored_count} members** from `#bot-memory`.", view=None)
+        await purge_all_backups(ctx.guild, keep_newest=0)
+        await save_data_to_channel(ctx.guild, keep_last=1)
+
+        await prompt_msg.edit(
+            content=(
+                f"♻️ **State Successfully Restored**: Loaded **{restored_count} member profiles** from {target_desc}.\n"
+                "🧹 `#bot-memory` has been purged of obsolete snapshots and synced with a fresh baseline."
+            ),
+            embed=None,
+            view=None
+        )
     else:
-        await prompt_msg.edit(content="❌ **Recovery Failed**: No valid backup file located in `#bot-memory`.", view=None)
+        await prompt_msg.edit(
+            content="❌ **Recovery Failed**: Could not parse any valid progression data from the selected source.",
+            embed=None,
+            view=None
+        )
 
 @bot.group(name="maintenance", invoke_without_command=True)
 @is_admin_or_owner()
