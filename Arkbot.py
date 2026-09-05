@@ -32,7 +32,7 @@ welcome_channels = {}
 team_rules_channels = {}
 team_news_channels = {}
 
-# Leveling & Cooldown Configuration (Fast & Engaging Pacing)
+# Leveling & Cooldown Configuration
 MAX_LEVEL = 60
 XP_COOLDOWN_SECONDS = 30
 MIN_XP_PER_MSG = 20
@@ -322,7 +322,7 @@ async def apply_member_hex_color(member: discord.Member, role_name: str, color_o
                 reason="Pro Hex Name Color Initialization"
             )
         except (discord.Forbidden, discord.HTTPException):
-            return False, "❌ Failed to create the color role. Check bot permissions."
+            return False, "❌ Failed to create color role. Check bot permissions."
 
     if guild.me.top_role <= target_role:
         return False, "❌ Hierarchy Error: Move the bot's role higher in Server Settings > Roles."
@@ -902,13 +902,11 @@ async def restore_data_from_channel(guild: discord.Guild, target_attachment: dis
         apply_data(chosen["clean"])
         return chosen["count"]
 
-    # Priority 1: Pick latest backup with real progression data
     for bkp in candidate_backups:
         if bkp["total_xp"] > 0 or bkp["clean"]["highest_lvl"] > 1:
             apply_data(bkp["clean"])
             return bkp["count"]
 
-    # Priority 2: Fallback to newest available file
     chosen = candidate_backups[0]
     apply_data(chosen["clean"])
     return chosen["count"]
@@ -1278,16 +1276,20 @@ class ProHexColorSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        # 1. Instantly acknowledge interaction within Discord's 3-second deadline
+        await interaction.response.defer(ephemeral=True)
+
         user = interaction.user
         selected = self.values[0]
 
         if selected == "Remove Color":
             _, msg = await remove_member_hex_color(user)
-            return await interaction.response.send_message(msg, ephemeral=True)
+            return await interaction.followup.send(msg, ephemeral=True)
 
+        # 2. Apply color and send feedback via followup
         color_obj = PRO_HEX_COLORS.get(selected, discord.Color.default())
         _, msg = await apply_member_hex_color(user, selected, color_obj)
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.followup.send(msg, ephemeral=True)
 
 class ColorSelectView(discord.ui.View):
     def __init__(self):
@@ -3186,7 +3188,7 @@ async def maintenance_deactivate(ctx):
     if not check_birthdays_loop.is_running():
         check_birthdays_loop.start()
     if not check_anniversaries_loop.is_running():
-        check_anniversaries_loop.start()
+        check_anniversaries_loop.cancel()
 
     await bot.change_presence(status=discord.Status.online, activity=None)
 
