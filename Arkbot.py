@@ -29,6 +29,8 @@ birthday_channels = {}
 confession_channels = {}
 colors_channels = {}
 welcome_channels = {}
+team_rules_channels = {}
+team_news_channels = {}
 
 # Leveling & Cooldown Configuration (Fast & Engaging Pacing)
 MAX_LEVEL = 60
@@ -204,7 +206,7 @@ def can_moderate_member(ctx, target: discord.Member) -> bool:
 # PROGRESSION & ROLE ENGINE
 # ==========================================
 def get_xp_for_level(level: int) -> int:
-    """Streamlined XP scaling formula for engaging active chat progression."""
+    """Streamlined XP scaling formula for active chat progression."""
     if level >= MAX_LEVEL:
         return 35 * (MAX_LEVEL ** 2) + 120 * MAX_LEVEL
     return 35 * (level ** 2) + 120 * level
@@ -300,6 +302,68 @@ async def add_xp(user: discord.Member, amount: int):
         user_xp[gid][uid] = current_xp
 
 # ==========================================
+# PRO HEX NAME COLOR DYNAMICS
+# ==========================================
+async def apply_member_hex_color(member: discord.Member, role_name: str, color_obj: discord.Color) -> tuple[bool, str]:
+    """
+    Elevates the selected hex role directly beneath the bot's highest role
+    so Discord displays this color above Level and Anniversary roles in chat.
+    """
+    guild = member.guild
+    if not guild.me.guild_permissions.manage_roles:
+        return False, "❌ Bot is missing the **Manage Roles** permission."
+
+    target_role = discord.utils.get(guild.roles, name=role_name)
+    if not target_role:
+        try:
+            target_role = await guild.create_role(
+                name=role_name,
+                color=color_obj,
+                reason="Pro Hex Name Color Initialization"
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            return False, "❌ Failed to create the color role. Check bot permissions."
+
+    if guild.me.top_role <= target_role:
+        return False, "❌ Hierarchy Error: Move the bot's role higher in Server Settings > Roles."
+
+    try:
+        bot_pos = guild.me.top_role.position
+        desired_pos = max(1, bot_pos - 1)
+        if target_role.position < desired_pos:
+            await guild.edit_role_positions({target_role: desired_pos})
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+    current_colors = [
+        r for r in member.roles 
+        if r.name in PRO_HEX_COLORS.keys() or r.name.startswith("Color-")
+    ]
+
+    try:
+        if current_colors:
+            await member.remove_roles(*current_colors, reason="Updating active name color")
+        await member.add_roles(target_role, reason="Member equipped Pro Hex color")
+        return True, f"🎨 **Name Color Updated**: Your name is now styled with **{target_role.name}**!"
+    except discord.Forbidden:
+        return False, "❌ Discord rejected role assignment due to role hierarchy."
+    except discord.HTTPException:
+        return False, "❌ Network error updating roles. Please try again."
+
+async def remove_member_hex_color(member: discord.Member) -> tuple[bool, str]:
+    current_colors = [
+        r for r in member.roles 
+        if r.name in PRO_HEX_COLORS.keys() or r.name.startswith("Color-")
+    ]
+    if not current_colors:
+        return False, "ℹ️ You do not currently have an active color role equipped."
+    try:
+        await member.remove_roles(*current_colors, reason="Member reset name color")
+        return True, "🗑️ **Color Cleared**: Your name color has been reset to default."
+    except (discord.Forbidden, discord.HTTPException):
+        return False, "❌ Missing permissions to manage roles."
+
+# ==========================================
 # CHANNEL MANAGERS & ACCESS CONTROLS
 # ==========================================
 async def get_or_create_announcement_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
@@ -307,13 +371,37 @@ async def get_or_create_announcement_channel(guild: discord.Guild) -> Optional[d
     if ch_id and guild.get_channel(ch_id):
         return guild.get_channel(ch_id)
 
-    channel = discord.utils.find(lambda c: c.name.lower() in ["announcements", "level-announcements", "level-ups"], guild.text_channels)
+    channel = discord.utils.find(
+        lambda c: c.name.lower() in [
+            "announcements", "announcement", "📢・announcements",
+            "level-announcements", "server-announcements"
+        ],
+        guild.text_channels
+    )
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(
+            view_channel=True,
+            read_messages=True,
+            read_message_history=True,
+            send_messages=False
+        ),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True,
+            read_messages=True,
+            send_messages=True,
+            manage_channels=True,
+            manage_messages=True,
+            mention_everyone=True
+        )
+    }
+
     if channel:
         announcement_channels[guild.id] = channel.id
         return channel
 
     try:
-        new_ch = await guild.create_text_channel("level-announcements")
+        new_ch = await guild.create_text_channel("📢・announcements", overwrites=overwrites)
         announcement_channels[guild.id] = new_ch.id
         return new_ch
     except (discord.Forbidden, discord.HTTPException):
@@ -450,6 +538,108 @@ async def get_or_create_colors_channel(guild: discord.Guild) -> Optional[discord
     try:
         new_ch = await guild.create_text_channel("🎨・colours", overwrites=overwrites)
         colors_channels[guild.id] = new_ch.id
+        return new_ch
+    except (discord.Forbidden, discord.HTTPException):
+        return None
+
+async def get_or_create_team_rules_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    ch_id = team_rules_channels.get(guild.id)
+    channel = guild.get_channel(ch_id) if ch_id else None
+
+    if not channel:
+        channel = discord.utils.find(
+            lambda c: c.name.lower() in ["team-rules", "staff-rules", "🛡️・team-rules"], 
+            guild.text_channels
+        )
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True,
+            read_messages=True,
+            read_message_history=True,
+            send_messages=True,
+            manage_channels=True,
+            manage_messages=True
+        )
+    }
+
+    admin_perms = discord.PermissionOverwrite(view_channel=True, read_messages=True, read_message_history=True, send_messages=True)
+    staff_read_only = discord.PermissionOverwrite(view_channel=True, read_messages=True, read_message_history=True, send_messages=False)
+
+    if guild.owner:
+        overwrites[guild.owner] = admin_perms
+
+    for role in guild.roles:
+        rname = role.name.lower()
+        if role.permissions.administrator or rname in ["authority", "admin", "administrator"]:
+            overwrites[role] = admin_perms
+        elif rname in ["head moderator", "moderator", "team", "helper"]:
+            overwrites[role] = staff_read_only
+
+    if channel:
+        team_rules_channels[guild.id] = channel.id
+        try:
+            for target, overwrite in overwrites.items():
+                await channel.set_permissions(target, overwrite=overwrite)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        return channel
+
+    try:
+        new_ch = await guild.create_text_channel("🛡️・team-rules", overwrites=overwrites)
+        team_rules_channels[guild.id] = new_ch.id
+        return new_ch
+    except (discord.Forbidden, discord.HTTPException):
+        return None
+
+async def get_or_create_team_news_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    ch_id = team_news_channels.get(guild.id)
+    channel = guild.get_channel(ch_id) if ch_id else None
+
+    if not channel:
+        channel = discord.utils.find(
+            lambda c: c.name.lower() in ["team-news", "staff-news", "📰・team-news", "bot-updates"],
+            guild.text_channels
+        )
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True,
+            read_messages=True,
+            read_message_history=True,
+            send_messages=True,
+            manage_channels=True,
+            manage_messages=True
+        )
+    }
+
+    admin_perms = discord.PermissionOverwrite(view_channel=True, read_messages=True, read_message_history=True, send_messages=True)
+    staff_read_only = discord.PermissionOverwrite(view_channel=True, read_messages=True, read_message_history=True, send_messages=False)
+
+    if guild.owner:
+        overwrites[guild.owner] = admin_perms
+
+    for role in guild.roles:
+        rname = role.name.lower()
+        if role.permissions.administrator or rname in ["authority", "admin", "administrator"]:
+            overwrites[role] = admin_perms
+        elif rname in ["head moderator", "moderator", "team", "helper"]:
+            overwrites[role] = staff_read_only
+
+    if channel:
+        team_news_channels[guild.id] = channel.id
+        try:
+            for target, overwrite in overwrites.items():
+                await channel.set_permissions(target, overwrite=overwrite)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        return channel
+
+    try:
+        new_ch = await guild.create_text_channel("📰・team-news", overwrites=overwrites)
+        team_news_channels[guild.id] = new_ch.id
         return new_ch
     except (discord.Forbidden, discord.HTTPException):
         return None
@@ -712,12 +902,13 @@ async def restore_data_from_channel(guild: discord.Guild, target_attachment: dis
         apply_data(chosen["clean"])
         return chosen["count"]
 
-    # Auto-Restore: Prioritize backups containing real progression
+    # Priority 1: Pick latest backup with real progression data
     for bkp in candidate_backups:
         if bkp["total_xp"] > 0 or bkp["clean"]["highest_lvl"] > 1:
             apply_data(bkp["clean"])
             return bkp["count"]
 
+    # Priority 2: Fallback to newest available file
     chosen = candidate_backups[0]
     apply_data(chosen["clean"])
     return chosen["count"]
@@ -915,7 +1106,6 @@ class WelcomeProfileModal(discord.ui.Modal, title="Server Profile Setup"):
         new_name = self.preferred_name.value.strip()
         gender_raw = self.gender_input.value.strip()
 
-        # Update Server Nickname safely
         nickname_updated = False
         if guild.me.guild_permissions.manage_nicknames and guild.me.top_role > member.top_role and member.id != guild.owner_id:
             try:
@@ -924,7 +1114,6 @@ class WelcomeProfileModal(discord.ui.Modal, title="Server Profile Setup"):
             except (discord.Forbidden, discord.HTTPException):
                 nickname_updated = False
 
-        # Match & Assign Gender Role
         matched_role_name = None
         for key in GENDER_ROLE_PALETTE.keys():
             if key.lower() in gender_raw.lower():
@@ -1072,13 +1261,13 @@ class ConfessionButtonView(discord.ui.View):
 class ProHexColorSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Pro Hex Red", emoji="🔴", description="Equip vibrant red hex role"),
-            discord.SelectOption(label="Pro Hex Green", emoji="🟢", description="Equip vibrant green hex role"),
-            discord.SelectOption(label="Pro Hex Blue", emoji="🔵", description="Equip ocean blue hex role"),
-            discord.SelectOption(label="Pro Hex Pink", emoji="🌸", description="Equip pastel pink hex role"),
-            discord.SelectOption(label="Pro Hex Yellow", emoji="🟡", description="Equip bright yellow hex role"),
-            discord.SelectOption(label="Pro Hex Orange", emoji="🟠", description="Equip deep orange hex role"),
-            discord.SelectOption(label="Remove Color", emoji="✖️", description="Strip your active color role")
+            discord.SelectOption(label="Pro Hex Red", emoji="🔴", description="Equip vibrant red name color"),
+            discord.SelectOption(label="Pro Hex Green", emoji="🟢", description="Equip vibrant green name color"),
+            discord.SelectOption(label="Pro Hex Blue", emoji="🔵", description="Equip ocean blue name color"),
+            discord.SelectOption(label="Pro Hex Pink", emoji="🌸", description="Equip pastel pink name color"),
+            discord.SelectOption(label="Pro Hex Yellow", emoji="🟡", description="Equip bright yellow name color"),
+            discord.SelectOption(label="Pro Hex Orange", emoji="🟠", description="Equip deep orange name color"),
+            discord.SelectOption(label="Remove Color", emoji="✖️", description="Reset your name color to default")
         ]
         super().__init__(
             placeholder="🎨 Choose your name color...",
@@ -1090,38 +1279,15 @@ class ProHexColorSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         user = interaction.user
-        guild = interaction.guild
-        selected_choice = self.values[0]
+        selected = self.values[0]
 
-        current_hex_roles = [r for r in user.roles if r.name in PRO_HEX_COLORS.keys() or r.name.startswith("Color-")]
+        if selected == "Remove Color":
+            _, msg = await remove_member_hex_color(user)
+            return await interaction.response.send_message(msg, ephemeral=True)
 
-        if selected_choice == "Remove Color":
-            if current_hex_roles:
-                try:
-                    await user.remove_roles(*current_hex_roles, reason="Member cleared color role")
-                    return await interaction.response.send_message("🗑️ **Color Cleared**: Your color role has been removed.", ephemeral=True)
-                except discord.Forbidden:
-                    return await interaction.response.send_message("❌ Missing permissions to manage roles.", ephemeral=True)
-            return await interaction.response.send_message("ℹ️ You do not currently have a color role equipped.", ephemeral=True)
-
-        target_role = discord.utils.get(guild.roles, name=selected_choice)
-        if not target_role:
-            color_obj = PRO_HEX_COLORS.get(selected_choice, discord.Color.default())
-            target_role = await ensure_role_exists(guild, selected_choice, color_obj)
-
-        if not target_role:
-            return await interaction.response.send_message("❌ Failed to initialize the requested color role.", ephemeral=True)
-
-        if guild.me.top_role <= target_role:
-            return await interaction.response.send_message("❌ Hierarchy Error: Move the bot's role higher in Server Settings > Roles.", ephemeral=True)
-
-        try:
-            if current_hex_roles:
-                await user.remove_roles(*current_hex_roles, reason="Switching color role")
-            await user.add_roles(target_role, reason="Member self-assigned color")
-            await interaction.response.send_message(f"🎨 **Color Updated**: You are now styled with **{target_role.name}**!", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.response.send_message("❌ Permission error: Discord rejected the role assignment.", ephemeral=True)
+        color_obj = PRO_HEX_COLORS.get(selected, discord.Color.default())
+        _, msg = await apply_member_hex_color(user, selected, color_obj)
+        await interaction.response.send_message(msg, ephemeral=True)
 
 class ColorSelectView(discord.ui.View):
     def __init__(self):
@@ -1366,8 +1532,76 @@ class TicketLauncherView(discord.ui.View):
         )
 
 # ==========================================
-# CENTRAL MANUAL PUBLISHER
+# TEAM RULES & MANUAL PUBLISHERS
 # ==========================================
+async def publish_or_update_team_rules(guild: discord.Guild) -> Optional[discord.Message]:
+    rules_ch = await get_or_create_team_rules_channel(guild)
+    if not rules_ch:
+        return None
+
+    try:
+        async for msg in rules_ch.history(limit=25):
+            if msg.author.id == bot.user.id and msg.embeds:
+                if any("Staff & Team Code of Conduct" in (e.title or "") for e in msg.embeds):
+                    try:
+                        await msg.delete()
+                    except (discord.NotFound, discord.Forbidden):
+                        pass
+    except Exception as e:
+        print(f"Error purging old team rules in {guild.id}: {e}")
+
+    embed = discord.Embed(
+        title="🛡️ Server Staff & Team Code of Conduct",
+        description=(
+            f"Welcome to the official staff roster of **{guild.name}**.\n\n"
+            "Holding a staff rank is a responsibility, not a trophy. You represent our community standard. "
+            "Every moderator and team member is held strictly accountable to the guidelines below.\n"
+        ),
+        color=discord.Color.teal(),
+        timestamp=discord.utils.utcnow()
+    )
+
+    embed.add_field(
+        name="✅ WHAT TEAM MEMBERS CAN & MUST DO",
+        value=(
+            "• **Enforce Rules Neutrally:** Issue warnings and mutes based strictly on server guidelines—never personal bias or drama.\n"
+            "• **De-Escalate Situations:** Attempt verbal warnings or topic redirection before executing formal timeouts or kicks.\n"
+            "• **Document Actions:** Always supply a clear, legitimate reason when executing `.warn`, `.mute`, `.kick`, or `.ban`.\n"
+            "• **Handle Support Tickets:** Claim and address tickets in `🎫 TICKETS` with patience and professionalism.\n"
+            "• **Use Channel Controls Responsibly:** Utilize `.lockdown` or `.purge` strictly during raids, spam floods, or severe disruptions.\n"
+            "• **Escalate to Leadership:** Report ban-worthy offenses or internal staff disputes directly to `Authority` or Server Owners.\n"
+            "• **Resign Honorably:** If real-life commitments arise, step down cleanly using `.resign` without abandoning duties mid-incident."
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="❌ WHAT TEAM MEMBERS CANNOT DO (ZERO TOLERANCE)",
+        value=(
+            "• **Power-Tripping & Harassment:** Never threaten, insult, or punish members because you dislike them or lost an argument.\n"
+            "• **Confidentiality Leaks:** Leaking private ticket contents, anonymous confession logs, staff deliberations, or `#bot-memory` results in an **instant ban**.\n"
+            "• **Overriding Fellow Staff:** Do not lift mutes, clear warnings, or reverse actions taken by another moderator without consulting them.\n"
+            "• **Channel & Role Abuse:** Do not grant unauthorized roles, create rogue channels, or modify bot configurations.\n"
+            "• **Public Arguments:** Never argue with fellow staff members in public chat. Settle differences privately or inside staff-only channels.\n"
+            "• **Backdoor / Admin Exploitation:** Lower staff may not touch database snapshots (`.savedata`, `.restoredata`) or bypass bot maintenance.\n"
+            "• **Solicitation:** Promoting personal projects, external servers, or accepting payment for favors is strictly prohibited."
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="⚖️ Escalation Chain & Inactivity",
+        value=(
+            "1. **First Offense:** Formal warning & internal leadership review.\n"
+            "2. **Second Offense:** Demotion to standard member and temporary moderation restriction.\n"
+            "3. **Inactivity Policy:** Staff absent for more than **7 consecutive days** without notice will be temporarily relieved of their roles until return."
+        ),
+        inline=False
+    )
+
+    embed.set_footer(text=f"{guild.name} Leadership Guidelines • Enforced by {BOT_COMPANY_NAME}")
+    return await rules_ch.send(embed=embed)
+
 async def publish_or_update_botcommands(guild: discord.Guild, update_note: str = None) -> Optional[discord.Message]:
     cmd_ch = await get_or_create_bot_commands_channel(guild)
     if not cmd_ch:
@@ -1432,6 +1666,15 @@ async def publish_or_update_botcommands(guild: discord.Guild, update_note: str =
     )
 
     embed.add_field(
+        name="📢 Broadcasts & Announcements",
+        value=(
+            "`.announce [@everyone/@here] <text>` — Broadcast an official announcement to `#announcements` (supports image uploads).\n"
+            "`.botupdate <Title> | <Details>` — Dispatch a new bot capability notice into `#team-news`."
+        ),
+        inline=False
+    )
+
+    embed.add_field(
         name="🚦 Anonymous Confessions (#confession)",
         value=(
             "`.confesspanel` — Post the interactive secret confession button.\n"
@@ -1461,7 +1704,8 @@ async def publish_or_update_botcommands(guild: discord.Guild, update_note: str =
             "`.role members <Role>` — View non-bot members holding a role.\n"
             "`.autorole_setup` — Initialize tier roles, colors, and `BumpPings`.\n"
             "`.colorpanel` — Post member color dropdown in `#colours`.\n"
-            "`.welcomesetup` — Post persistent onboarding card in `#welcome`."
+            "`.welcomesetup` — Post persistent onboarding card in `#welcome`.\n"
+            "`.teamrules` — Refresh code of conduct embed in `#team-rules`."
         ),
         inline=False
     )
@@ -1532,9 +1776,17 @@ async def on_ready():
         await get_or_create_bump_role(guild)
         await get_or_create_confession_channel(guild)
         await get_or_create_welcome_channel(guild)
+        await get_or_create_team_rules_channel(guild)
+        await get_or_create_team_news_channel(guild)
         await get_or_create_ticket_category(guild)
         await get_or_create_locked_ticket_category(guild)
         await get_or_create_memory_channel(guild)
+
+        rules_ch = await get_or_create_team_rules_channel(guild)
+        if rules_ch:
+            history = [m async for m in rules_ch.history(limit=5)]
+            if not any(m.author.id == bot.user.id and m.embeds for m in history):
+                await publish_or_update_team_rules(guild)
 
         colors_ch = await get_or_create_colors_channel(guild)
         if colors_ch:
@@ -1592,14 +1844,12 @@ async def on_member_join(member: discord.Member):
     guild = member.guild
     gid = guild.id
 
-    # 1. Progression Baseline
     user_levels[gid][member.id] = 1
     user_xp[gid][member.id] = 0
     await update_member_level_role(member, 1)
 
     onboard_view = WelcomeProfileView(guild_id=guild.id)
 
-    # 2. Build Private DM Card
     dm_embed = discord.Embed(
         title=f"🌸 Welcome to {guild.name}!",
         description=(
@@ -1622,7 +1872,6 @@ async def on_member_join(member: discord.Member):
     except (discord.Forbidden, discord.HTTPException):
         dm_delivered = False
 
-    # 3. Public Announcement in #welcome
     welcome_ch = await get_or_create_welcome_channel(guild)
     if welcome_ch:
         total_members = guild.member_count
@@ -1661,7 +1910,6 @@ async def on_message(message: discord.Message):
     gid = message.guild.id
     now_ts = datetime.datetime.now(datetime.timezone.utc).timestamp()
 
-    # Disboard Bump Event Verification
     if message.author.id == DISBOARD_BOT_ID:
         bump_ch = await get_or_create_bump_channel(message.guild)
         if bump_ch and message.channel.id == bump_ch.id and message.embeds:
@@ -1699,7 +1947,6 @@ async def on_message(message: discord.Message):
     uid = message.author.id
     current_time = asyncio.get_event_loop().time()
 
-    # 1. Clear AFK status on return
     if uid in afk_users[gid] and not message.content.startswith(".afk"):
         del afk_users[gid][uid]
         welcome_line = random.choice(AFK_WELCOME_BACK_MESSAGES).format(mention=message.author.mention)
@@ -1711,14 +1958,12 @@ async def on_message(message: discord.Message):
 
         await message.channel.send(welcome_line)
 
-    # 2. XP Distribution (Fast/Dynamic 20-35 XP)
     last_xp = last_xp_awarded[gid].get(uid, 0.0)
     if current_time - last_xp >= XP_COOLDOWN_SECONDS:
         last_xp_awarded[gid][uid] = current_time
         earned_xp = random.randint(MIN_XP_PER_MSG, MAX_XP_PER_MSG)
         await add_xp(message.author, earned_xp)
 
-    # 3. Notify chat if someone pings an AFK member
     if message.mentions:
         for target in message.mentions:
             if target.id in afk_users[gid] and target.id != uid:
@@ -1733,6 +1978,134 @@ async def on_message(message: discord.Message):
                 await message.channel.send(ping_notice)
 
     await bot.process_commands(message)
+
+# ==========================================
+# COMMANDS: BROADCASTS & TEAM NEWS
+# ==========================================
+@bot.command(name="announce", aliases=["broadcast", "nounce"])
+@is_admin_or_owner()
+async def make_announcement(ctx, *, content: str):
+    """Broadcasts an official server announcement to #announcements."""
+    ann_ch = await get_or_create_announcement_channel(ctx.guild)
+    if not ann_ch:
+        return await ctx.send("❌ Could not locate or create the `#announcements` channel.")
+
+    clean_text = content.strip()
+    ping_header = ""
+
+    if clean_text.startswith("@everyone"):
+        ping_header = "@everyone"
+        clean_text = clean_text[9:].strip()
+    elif clean_text.startswith("@here"):
+        ping_header = "@here"
+        clean_text = clean_text[5:].strip()
+
+    if not clean_text:
+        return await ctx.send("❌ Please provide a message to announce.")
+
+    embed = discord.Embed(
+        title="📢 Official Server Announcement",
+        description=clean_text,
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow()
+    )
+
+    if ctx.guild.icon:
+        embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url)
+        embed.set_thumbnail(url=ctx.guild.icon.url)
+    else:
+        embed.set_author(name=ctx.guild.name)
+
+    embed.set_footer(
+        text=f"Announced by {ctx.author.display_name} • {BOT_COMPANY_NAME}",
+        icon_url=ctx.author.display_avatar.url
+    )
+
+    if ctx.message.attachments:
+        first_att = ctx.message.attachments[0]
+        if any(first_att.filename.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp"]):
+            embed.set_image(url=first_att.url)
+
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+    try:
+        await ann_ch.send(
+            content=ping_header if ping_header else None,
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions(everyone=True, roles=True)
+        )
+        confirm = await ctx.send(f"✅ **Announcement broadcasted successfully to** {ann_ch.mention}!")
+        await asyncio.sleep(4)
+        try:
+            await confirm.delete()
+        except (discord.NotFound, discord.Forbidden):
+            pass
+    except (discord.Forbidden, discord.HTTPException):
+        await ctx.send("❌ Failed to broadcast. Ensure the bot has `Send Messages` and `Mention Everyone` permissions.")
+
+@bot.command(name="botupdate", aliases=["newfunction", "teamnews", "featuredrop"])
+@is_admin_or_owner()
+async def announce_new_function(ctx, *, details: str):
+    """Broadcasts a new bot function or update into #team-news."""
+    news_ch = await get_or_create_team_news_channel(ctx.guild)
+    if not news_ch:
+        return await ctx.send("❌ Could not locate or create the `#team-news` channel.")
+
+    if "|" in details:
+        feature_name, instructions = [part.strip() for part in details.split("|", 1)]
+    else:
+        feature_name = "New System Upgrade"
+        instructions = details.strip()
+
+    embed = discord.Embed(
+        title="🚀 New Bot Function Deployed",
+        description=f"A new system capability has been deployed to {bot.user.mention}!",
+        color=discord.Color.teal(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="🔧 Function / Feature", value=f"**{feature_name}**", inline=False)
+    embed.add_field(name="📋 Details & Staff Usage", value=instructions, inline=False)
+
+    if ctx.message.attachments:
+        att = ctx.message.attachments[0]
+        if any(att.filename.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif"]):
+            embed.set_image(url=att.url)
+
+    embed.set_footer(
+        text=f"Added by {ctx.author.display_name} • {BOT_COMPANY_NAME}",
+        icon_url=ctx.author.display_avatar.url
+    )
+
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+    await news_ch.send(
+        content="📢 **Staff Update:** A new function has been added to the bot. Please review the details below:",
+        embed=embed
+    )
+
+    confirm = await ctx.send(f"✅ **Feature update dispatched to** {news_ch.mention}!")
+    await asyncio.sleep(4)
+    try:
+        await confirm.delete()
+    except (discord.NotFound, discord.Forbidden):
+        pass
+
+@bot.command(name="teamrules", aliases=["staffrules", "postteamrules"])
+@is_admin_or_owner()
+async def post_team_rules_cmd(ctx):
+    """Generates or updates the official Team Conduct and Rules message in #team-rules."""
+    status_msg = await ctx.send("⏳ Setting up `#team-rules` and publishing guidelines...")
+    sent_msg = await publish_or_update_team_rules(ctx.guild)
+    if sent_msg:
+        await status_msg.edit(content=f"✅ **Team rules published successfully in** {sent_msg.channel.mention}!")
+    else:
+        await status_msg.edit(content="❌ Failed to initialize `#team-rules`. Check bot permissions.")
 
 # ==========================================
 # COMMANDS: BIRTHDAY ENGINE (#birthdays)
@@ -2216,60 +2589,29 @@ async def set_color(ctx, *, color_input: str):
         return await ctx.send(f"❌ Color roles can only be chosen in {cmd_ch.mention}.")
 
     author = ctx.author
-    guild = ctx.guild
     color_input = color_input.strip()
 
-    current_colors = [r for r in author.roles if r.name in PRO_HEX_COLORS.keys() or r.name.startswith("Color-")]
+    if color_input.lower() in ["remove", "clear", "none", "reset"]:
+        _, msg = await remove_member_hex_color(author)
+        return await ctx.send(msg)
 
-    if color_input.lower() in ["remove", "clear", "none"]:
-        if current_colors:
-            await author.remove_roles(*current_colors, reason="Member cleared color role")
-            return await ctx.send(f"🗑️ Cleared color role from {author.mention}.")
-        return await ctx.send("ℹ️ You don't have an active color role equipped.")
-
-    matched_role_name = None
-    for name in PRO_HEX_COLORS.keys():
+    for name, col in PRO_HEX_COLORS.items():
         if color_input.lower() in name.lower():
-            matched_role_name = name
-            break
+            _, msg = await apply_member_hex_color(author, name, col)
+            return await ctx.send(msg)
 
-    target_role = None
-    if matched_role_name:
-        target_role = discord.utils.get(guild.roles, name=matched_role_name)
-        if not target_role:
-            target_role = await ensure_role_exists(guild, matched_role_name, PRO_HEX_COLORS[matched_role_name])
-    else:
-        clean_hex = color_input.lstrip("#")
-        if len(clean_hex) == 6 and all(c in "0123456789abcdefABCDEF" for c in clean_hex):
-            try:
-                hex_val = int(clean_hex, 16)
-                role_name = f"Color-#{clean_hex.upper()}"
-                target_role = discord.utils.get(guild.roles, name=role_name)
-                if not target_role:
-                    target_role = await guild.create_role(
-                        name=role_name,
-                        color=discord.Color(hex_val),
-                        reason=f"Custom color requested by {author}"
-                    )
-            except (ValueError, discord.Forbidden):
-                return await ctx.send("❌ Failed to process hex code. Ensure bot has `Manage Roles`.")
-        else:
-            options_list = ", ".join([k.replace("Pro Hex ", "") for k in PRO_HEX_COLORS.keys()])
-            return await ctx.send(f"❌ Invalid color. Choose a preset (`{options_list}`) or enter a valid hex (e.g. `.color #FF5733`).")
+    clean_hex = color_input.lstrip("#")
+    if len(clean_hex) == 6 and all(c in "0123456789abcdefABCDEF" for c in clean_hex):
+        try:
+            hex_val = int(clean_hex, 16)
+            role_name = f"Color-#{clean_hex.upper()}"
+            _, msg = await apply_member_hex_color(author, role_name, discord.Color(hex_val))
+            return await ctx.send(msg)
+        except ValueError:
+            return await ctx.send("❌ Invalid hex format.")
 
-    if not target_role:
-        return await ctx.send("❌ Could not create or assign that color role.")
-
-    if guild.me.top_role <= target_role:
-        return await ctx.send("❌ Hierarchy Error: Move the bot's role higher in Server Settings > Roles.")
-
-    try:
-        if current_colors:
-            await author.remove_roles(*current_colors, reason="Updating color role")
-        await author.add_roles(target_role, reason="Color role equipped")
-        await ctx.send(f"🎨 {author.mention} equipped **{target_role.name}**!")
-    except discord.Forbidden:
-        await ctx.send("❌ Discord rejected the role assignment due to role hierarchy.")
+    options = ", ".join([k.replace("Pro Hex ", "") for k in PRO_HEX_COLORS.keys()])
+    await ctx.send(f"❌ Invalid color. Choose a preset (`{options}`) or enter a valid hex (e.g., `.color #FF5733`).")
 
 # ==========================================
 # COMMANDS: STAFF MANAGEMENT & RESIGNATION
