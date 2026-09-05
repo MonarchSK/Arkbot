@@ -6,6 +6,7 @@ import datetime
 import random
 import json
 from collections import defaultdict
+from typing import Optional
 
 import discord
 from discord.ext import commands, tasks
@@ -27,10 +28,13 @@ bot_memory_channels = {}
 birthday_channels = {}
 confession_channels = {}
 colors_channels = {}
+welcome_channels = {}
 
-# Leveling & Cooldown Configuration
+# Leveling & Cooldown Configuration (Fast & Engaging Pacing)
 MAX_LEVEL = 60
-XP_COOLDOWN_SECONDS = 60
+XP_COOLDOWN_SECONDS = 30
+MIN_XP_PER_MSG = 20
+MAX_XP_PER_MSG = 35
 BUMP_COOLDOWN_SECONDS = 7200
 
 # Tenure & Milestone Configuration
@@ -45,38 +49,80 @@ ANNIVERSARY_ROLES = {
 }
 
 LEVEL_TIER_ROLES = {
-    (1, 9): {"name": "Newbie", "color": discord.Color.teal()},
-    (10, 19): {"name": "Explorer", "color": discord.Color.green()},
-    (20, 29): {"name": "Veteran", "color": discord.Color.blue()},
-    (30, 39): {"name": "Elite", "color": discord.Color.purple()},
-    (40, 49): {"name": "Champion", "color": discord.Color.gold()},
-    (50, 59): {"name": "Legend", "color": discord.Color.orange()},
+    (1, 9):   {"name": "Newbie",    "color": discord.Color.teal()},
+    (10, 19): {"name": "Explorer",  "color": discord.Color.green()},
+    (20, 29): {"name": "Vanguard",  "color": discord.Color.blue()},
+    (30, 39): {"name": "Elite",     "color": discord.Color.purple()},
+    (40, 49): {"name": "Champion",  "color": discord.Color.gold()},
+    (50, 59): {"name": "Legend",    "color": discord.Color.orange()},
     (60, 60): {"name": "Sovereign", "color": discord.Color.dark_red()}
 }
 
 RESTRICTED_ADMIN_ROLES = ["authority", "head moderator", "moderator"]
 
 PRO_HEX_COLORS = {
-    "Pro Hex Red": discord.Color.from_rgb(255, 75, 75),
-    "Pro Hex Green": discord.Color.from_rgb(75, 255, 125),
-    "Pro Hex Blue": discord.Color.from_rgb(75, 150, 255),
-    "Pro Hex Pink": discord.Color.from_rgb(255, 105, 180),
+    "Pro Hex Red":    discord.Color.from_rgb(255, 75, 75),
+    "Pro Hex Green":  discord.Color.from_rgb(75, 255, 125),
+    "Pro Hex Blue":   discord.Color.from_rgb(75, 150, 255),
+    "Pro Hex Pink":   discord.Color.from_rgb(255, 105, 180),
     "Pro Hex Yellow": discord.Color.from_rgb(255, 225, 75),
     "Pro Hex Orange": discord.Color.from_rgb(255, 140, 0)
 }
 
-TICKET_CHANNEL_FORMATS = {
-    "team": {"emoji": "💼", "tag": "apply"},
-    "report": {"emoji": "⚠️", "tag": "complaint"},
-    "help": {"emoji": "❓", "tag": "support"}
+GENDER_ROLE_PALETTE = {
+    "Male": discord.Color.blue(),
+    "Female": discord.Color.magenta(),
+    "Non-Binary": discord.Color.purple()
 }
 
+TICKET_CHANNEL_FORMATS = {
+    "team":   {"emoji": "💼", "tag": "apply"},
+    "report": {"emoji": "⚠️", "tag": "complaint"},
+    "help":   {"emoji": "❓", "tag": "support"}
+}
+
+# ==========================================
+# CUTE & LOVING MESSAGE POOLS
+# ==========================================
 CUTE_BUMP_MESSAGES = [
     "You're absolute perfection! Thanks for helping us grow! 💖✨",
     "Sending you virtual warm hugs and lots of appreciation! 🧸🌸",
     "You just brightened up the whole server's day! 🌟✨",
     "Thank you for being so amazing and keeping our cozy home alive! 🐾💌",
-    "You're a superstar! Server sparkles everywhere for you! ✨💖"
+    "You're a superstar! Server sparkles everywhere for you! ✨💖",
+    "Breaking news: You are officially the server's favorite human right now! 🥐☕",
+    "A wild hero appeared and bumped the server! You dropped this: 👑✨",
+    "Our community grows stronger every time you sprinkle your magic! 🪄💫",
+    "Sending 1,000,000 warm cookies directly to your inventory for that bump! 🍪🥛",
+    "You deserve a gold medal, a sweet hug, and infinite good karma! 🏅💖",
+    "The vibe level just shot up by 1000%! Thank you, absolute legend! 🚀🎉",
+    "Proof that angels exist: you just took time out of your day to bump us! 🪽🌸",
+    "Your kindness is unmatched! Take a bow, server MVP! 🎀💃",
+    "May your snacks be forever delicious and your pillows cold on both sides! 🥪❄️",
+    "Every time you bump, a puppy gets a treat and a flower blooms! 🐶🌼"
+]
+
+AFK_DEFAULT_REASONS = [
+    "Recharging my social battery with snacks and naps 🔋🍰",
+    "Temporarily wandering in dreamland... wake me up with treats 🧸💤",
+    "Plotting world peace (or just taking a very long bath) 🛁🫧",
+    "Distracted by something shiny. Send search parties if gone too long ✨🍪",
+    "Currently touching grass! Will return shortly 🌿👣",
+    "Doing secret undercover missions (definitely not eating cereal in bed) 🕵️‍♂️🥣"
+]
+
+AFK_PING_TEMPLATES = [
+    "🤫 **Shhh!** {name} is away right now: *\"{reason}\"*. Leave a cookie and be gentle! 🍪💤",
+    "💌 **Away from keyboard!** {name} stepped away: *\"{reason}\"*. Don't worry, they still love you! 💖✨",
+    "🐾 **AFK Alert!** {name} is currently busy: *\"{reason}\"*. Your ping has been saved for their return! 📬🌸",
+    "☁️ **Floating away!** {name} has temporarily vanished: *\"{reason}\"*. I'll let them know you missed them! 🧸💭"
+]
+
+AFK_WELCOME_BACK_MESSAGES = [
+    "🥰 Look who decided to grace us with their presence again! Welcome back {mention}! ✨",
+    "🎉 The legend returns! The chat was way too quiet without you, {mention}! 💖",
+    "🔋 Social battery recharged! So happy to see you back in the room, {mention}! 🌸",
+    "🥳 Hooray, {mention} is back! The server vibe is officially restored! 🍰💫"
 ]
 
 BIRTHDAY_WISHES = [
@@ -145,12 +191,6 @@ def is_admin_or_higher():
         raise commands.CheckFailure("⛔ **Permission Denied**: You do not possess the required staff permissions.")
     return commands.check(predicate)
 
-def is_team_member(member: discord.Member) -> bool:
-    if member.id == member.guild.owner_id or member.guild_permissions.administrator:
-        return True
-    user_roles = [r.name.lower() for r in member.roles]
-    return any(role in user_roles for role in RESTRICTED_ADMIN_ROLES) or any("team" in r or "staff" in r for r in user_roles)
-
 def can_moderate_member(ctx, target: discord.Member) -> bool:
     if target.id == ctx.guild.owner_id:
         return False
@@ -164,9 +204,10 @@ def can_moderate_member(ctx, target: discord.Member) -> bool:
 # PROGRESSION & ROLE ENGINE
 # ==========================================
 def get_xp_for_level(level: int) -> int:
+    """Streamlined XP scaling formula for engaging active chat progression."""
     if level >= MAX_LEVEL:
-        return 100 * (MAX_LEVEL ** 2) + 400 * MAX_LEVEL
-    return 100 * (level ** 2) + 400 * level
+        return 35 * (MAX_LEVEL ** 2) + 120 * MAX_LEVEL
+    return 35 * (level ** 2) + 120 * level
 
 def get_tier_info_for_level(level: int) -> dict:
     for (min_lvl, max_lvl), tier_data in LEVEL_TIER_ROLES.items():
@@ -174,16 +215,16 @@ def get_tier_info_for_level(level: int) -> dict:
             return tier_data
     return LEVEL_TIER_ROLES[(1, 9)]
 
-async def ensure_role_exists(guild: discord.Guild, role_name: str, color: discord.Color, mentionable: bool = False):
+async def ensure_role_exists(guild: discord.Guild, role_name: str, color: discord.Color, mentionable: bool = False) -> Optional[discord.Role]:
     role = discord.utils.get(guild.roles, name=role_name)
     if not role:
         try:
             role = await guild.create_role(name=role_name, color=color, mentionable=mentionable, reason="Auto System Setup")
-        except discord.Forbidden:
+        except (discord.Forbidden, discord.HTTPException):
             return None
     return role
 
-async def get_or_create_bump_role(guild: discord.Guild) -> discord.Role:
+async def get_or_create_bump_role(guild: discord.Guild) -> Optional[discord.Role]:
     role = discord.utils.find(lambda r: r.name.lower() == "bumppings", guild.roles)
     if not role:
         try:
@@ -193,12 +234,12 @@ async def get_or_create_bump_role(guild: discord.Guild) -> discord.Role:
                 mentionable=True,
                 reason="Auto-created for server bump reminders"
             )
-        except discord.Forbidden:
+        except (discord.Forbidden, discord.HTTPException):
             return None
     elif not role.mentionable:
         try:
             await role.edit(mentionable=True)
-        except discord.Forbidden:
+        except (discord.Forbidden, discord.HTTPException):
             pass
     return role
 
@@ -218,7 +259,7 @@ async def update_member_level_role(member: discord.Member, new_level: int):
             await member.remove_roles(*roles_to_remove, reason="Level Tier Transition")
         if target_role not in member.roles:
             await member.add_roles(target_role, reason="Level Tier Advancement")
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException):
         pass
 
 async def add_xp(user: discord.Member, amount: int):
@@ -251,14 +292,17 @@ async def add_xp(user: discord.Member, amount: int):
                 color=tier_info["color"]
             )
             embed.add_field(name="Tier Reached", value=tier_info["name"])
-            await target_channel.send(embed=embed)
+            try:
+                await target_channel.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
     else:
         user_xp[gid][uid] = current_xp
 
 # ==========================================
-# CHANNEL MANAGER (EXACT-CHANNEL ROUTING)
+# CHANNEL MANAGERS & ACCESS CONTROLS
 # ==========================================
-async def get_or_create_announcement_channel(guild: discord.Guild):
+async def get_or_create_announcement_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
     ch_id = announcement_channels.get(guild.id)
     if ch_id and guild.get_channel(ch_id):
         return guild.get_channel(ch_id)
@@ -272,10 +316,10 @@ async def get_or_create_announcement_channel(guild: discord.Guild):
         new_ch = await guild.create_text_channel("level-announcements")
         announcement_channels[guild.id] = new_ch.id
         return new_ch
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException):
         return None
 
-async def get_or_create_bot_commands_channel(guild: discord.Guild):
+async def get_or_create_bot_commands_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
     ch_id = bot_commands_channels.get(guild.id)
     if ch_id and guild.get_channel(ch_id):
         return guild.get_channel(ch_id)
@@ -289,10 +333,10 @@ async def get_or_create_bot_commands_channel(guild: discord.Guild):
         new_ch = await guild.create_text_channel("bot-commands")
         bot_commands_channels[guild.id] = new_ch.id
         return new_ch
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException):
         return None
 
-async def get_or_create_bump_channel(guild: discord.Guild):
+async def get_or_create_bump_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
     ch_id = bump_channels.get(guild.id)
     if ch_id and guild.get_channel(ch_id):
         return guild.get_channel(ch_id)
@@ -306,10 +350,10 @@ async def get_or_create_bump_channel(guild: discord.Guild):
         new_ch = await guild.create_text_channel("bump")
         bump_channels[guild.id] = new_ch.id
         return new_ch
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException):
         return None
 
-async def get_or_create_birthday_channel(guild: discord.Guild):
+async def get_or_create_birthday_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
     ch_id = birthday_channels.get(guild.id)
     if ch_id and guild.get_channel(ch_id):
         return guild.get_channel(ch_id)
@@ -324,10 +368,10 @@ async def get_or_create_birthday_channel(guild: discord.Guild):
         birthday_channels[guild.id] = new_ch.id
         await new_ch.send("🎂 **Birthdays Channel Initialized!** Use `.setbirthday DD-MM` here.")
         return new_ch
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException):
         return None
 
-async def get_or_create_confession_channel(guild: discord.Guild):
+async def get_or_create_confession_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
     ch_id = confession_channels.get(guild.id)
     if ch_id and guild.get_channel(ch_id):
         return guild.get_channel(ch_id)
@@ -341,27 +385,76 @@ async def get_or_create_confession_channel(guild: discord.Guild):
         new_ch = await guild.create_text_channel("🚦（︶︶）confession")
         confession_channels[guild.id] = new_ch.id
         return new_ch
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException):
         return None
 
-async def get_or_create_colors_channel(guild: discord.Guild):
+async def get_or_create_welcome_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    ch_id = welcome_channels.get(guild.id)
+    if ch_id and guild.get_channel(ch_id):
+        return guild.get_channel(ch_id)
+
+    channel = discord.utils.find(lambda c: c.name.lower() in ["welcome", "joins", "👋・welcome"], guild.text_channels)
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(
+            view_channel=True,
+            read_messages=True,
+            read_message_history=True,
+            send_messages=False
+        ),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True,
+            read_messages=True,
+            send_messages=True,
+            manage_channels=True,
+            manage_messages=True
+        )
+    }
+
+    if channel:
+        welcome_channels[guild.id] = channel.id
+        return channel
+
+    try:
+        new_ch = await guild.create_text_channel("👋・welcome", overwrites=overwrites)
+        welcome_channels[guild.id] = new_ch.id
+        return new_ch
+    except (discord.Forbidden, discord.HTTPException):
+        return None
+
+async def get_or_create_colors_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
     ch_id = colors_channels.get(guild.id)
     if ch_id and guild.get_channel(ch_id):
         return guild.get_channel(ch_id)
 
     channel = discord.utils.find(lambda c: c.name.lower() in ["colours", "colors", "🎨・colours", "🎨・colors"], guild.text_channels)
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(
+            view_channel=True,
+            read_messages=True,
+            read_message_history=True,
+            send_messages=False
+        ),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True,
+            read_messages=True,
+            send_messages=True,
+            manage_channels=True,
+            manage_messages=True
+        )
+    }
+
     if channel:
         colors_channels[guild.id] = channel.id
         return channel
 
     try:
-        new_ch = await guild.create_text_channel("🎨・colours")
+        new_ch = await guild.create_text_channel("🎨・colours", overwrites=overwrites)
         colors_channels[guild.id] = new_ch.id
         return new_ch
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException):
         return None
 
-async def get_or_create_ticket_category(guild: discord.Guild) -> discord.CategoryChannel:
+async def get_or_create_ticket_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
     cat = discord.utils.find(lambda c: c.name.lower() in ["tickets", "🎫 tickets"], guild.categories)
     if not cat:
         try:
@@ -370,11 +463,11 @@ async def get_or_create_ticket_category(guild: discord.Guild) -> discord.Categor
                 guild.me: discord.PermissionOverwrite(view_channel=True, manage_channels=True)
             }
             cat = await guild.create_category("🎫 TICKETS", overwrites=overwrites)
-        except discord.Forbidden:
+        except (discord.Forbidden, discord.HTTPException):
             return None
     return cat
 
-async def get_or_create_locked_ticket_category(guild: discord.Guild) -> discord.CategoryChannel:
+async def get_or_create_locked_ticket_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
     cat = discord.utils.find(lambda c: c.name.lower() in ["locked tickets", "🔒 locked tickets", "archived tickets"], guild.categories)
     if not cat:
         try:
@@ -390,48 +483,67 @@ async def get_or_create_locked_ticket_category(guild: discord.Guild) -> discord.
                     overwrites[role] = staff_perms
 
             cat = await guild.create_category("🔒 LOCKED TICKETS", overwrites=overwrites)
-        except discord.Forbidden:
+        except (discord.Forbidden, discord.HTTPException):
             return None
     return cat
 
-async def get_or_create_memory_channel(guild: discord.Guild):
-    """Finds or creates #bot-memory and actively enforces history-reading permissions."""
+async def get_or_create_memory_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
     ch_id = bot_memory_channels.get(guild.id)
     channel = guild.get_channel(ch_id) if ch_id else None
 
     if not channel:
         channel = discord.utils.find(lambda c: c.name.lower() == "bot-memory", guild.text_channels)
 
-    desired_overwrites = {
-        guild.default_role: discord.PermissionOverwrite(read_messages=False, view_channel=False),
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(
+            view_channel=False,
+            read_messages=False,
+            send_messages=False,
+            read_message_history=False
+        ),
         guild.me: discord.PermissionOverwrite(
             view_channel=True,
             read_messages=True,
             read_message_history=True,
             send_messages=True,
-            attach_files=True
+            attach_files=True,
+            manage_channels=True
         )
     }
 
+    if guild.owner:
+        overwrites[guild.owner] = discord.PermissionOverwrite(
+            view_channel=True,
+            read_messages=True,
+            read_message_history=True
+        )
+
+    for role in guild.roles:
+        if role.permissions.administrator:
+            overwrites[role] = discord.PermissionOverwrite(
+                view_channel=True,
+                read_messages=True,
+                read_message_history=True
+            )
+
     if channel:
         bot_memory_channels[guild.id] = channel.id
-        perms = channel.permissions_for(guild.me)
-        if not perms.read_message_history or not perms.view_channel:
-            try:
-                await channel.set_permissions(guild.me, overwrite=desired_overwrites[guild.me])
-            except discord.Forbidden:
-                pass
+        try:
+            for target, overwrite in overwrites.items():
+                await channel.set_permissions(target, overwrite=overwrite)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
         return channel
 
     try:
-        new_ch = await guild.create_text_channel("bot-memory", overwrites=desired_overwrites)
+        new_ch = await guild.create_text_channel("bot-memory", overwrites=overwrites)
         bot_memory_channels[guild.id] = new_ch.id
         return new_ch
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException):
         return None
 
 # ==========================================
-# FILE-ATTACHMENT BACKUP & RECOVERY ENGINE
+# SECURE DATABASE & BACKUP ENGINE
 # ==========================================
 async def save_data_to_channel(guild: discord.Guild, keep_last: int = 3):
     memory_channel = await get_or_create_memory_channel(guild)
@@ -455,7 +567,10 @@ async def save_data_to_channel(guild: discord.Guild, keep_last: int = 3):
     data_file = discord.File(io.BytesIO(raw_json), filename=f"backup_{gid}.json")
     timestamp = discord.utils.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    await memory_channel.send(f"💾 **[DATABASE STATE SYNC]** `{timestamp}`", file=data_file)
+    try:
+        await memory_channel.send(f"💾 **[DATABASE STATE SYNC]** `{timestamp}`", file=data_file)
+    except (discord.Forbidden, discord.HTTPException):
+        return
 
     try:
         backup_messages = []
@@ -597,19 +712,18 @@ async def restore_data_from_channel(guild: discord.Guild, target_attachment: dis
         apply_data(chosen["clean"])
         return chosen["count"]
 
-    # Priority 1: Pick latest backup with actual progression (XP > 0 or Level > 1)
+    # Auto-Restore: Prioritize backups containing real progression
     for bkp in candidate_backups:
         if bkp["total_xp"] > 0 or bkp["clean"]["highest_lvl"] > 1:
             apply_data(bkp["clean"])
             return bkp["count"]
 
-    # Priority 2: Fallback to newest available file
     chosen = candidate_backups[0]
     apply_data(chosen["clean"])
     return chosen["count"]
 
 # ==========================================
-# BACKGROUND SCHEDULED LOOPS
+# BACKGROUND SCHEDULED TASKS
 # ==========================================
 @tasks.loop(minutes=10)
 async def periodic_backup_loop():
@@ -669,8 +783,11 @@ async def check_birthdays_loop():
                 embed.set_thumbnail(url=member.display_avatar.url)
                 embed.set_footer(text=f"{guild.name} Celebrations 🎈")
 
-                await bday_ch.send(content=f"🎊 Happy Birthday {member.mention}! 🎊", embed=embed)
-                await add_xp(member, 500)
+                try:
+                    await bday_ch.send(content=f"🎊 Happy Birthday {member.mention}! 🎊", embed=embed)
+                    await add_xp(member, 500)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
 
 @check_birthdays_loop.before_loop
 async def before_birthdays():
@@ -695,7 +812,7 @@ async def check_anniversaries_loop():
             if days_in_server >= OG_DAYS_REQUIRED and og_role and og_role not in member.roles:
                 try:
                     await member.add_roles(og_role, reason="Server Tenure Milestone: 1 Year (OG)")
-                except discord.Forbidden:
+                except (discord.Forbidden, discord.HTTPException):
                     pass
 
             if years_in_server > 0 and last_anniversary_awarded[gid].get(member.id) != years_in_server:
@@ -711,7 +828,7 @@ async def check_anniversaries_loop():
                     if milestone_role and milestone_role not in member.roles:
                         try:
                             await member.add_roles(milestone_role, reason=f"Tenure Milestone: Year {years_in_server}")
-                        except discord.Forbidden:
+                        except (discord.Forbidden, discord.HTTPException):
                             pass
 
                     await add_xp(member, tier_info["xp"])
@@ -729,14 +846,17 @@ async def check_anniversaries_loop():
                         )
                         embed.set_thumbnail(url=member.display_avatar.url)
                         embed.set_footer(text=f"Server Loyalty Recognition • {BOT_COMPANY_NAME}")
-                        await announcement_ch.send(embed=embed)
+                        try:
+                            await announcement_ch.send(embed=embed)
+                        except (discord.Forbidden, discord.HTTPException):
+                            pass
 
 @check_anniversaries_loop.before_loop
 async def before_anniversaries():
     await bot.wait_until_ready()
 
 # ==========================================
-# BUMP REMINDER ENGINE
+# BUMP REMINDER SCHEDULER
 # ==========================================
 async def schedule_bump_reminders(guild: discord.Guild, bump_channel: discord.TextChannel):
     try:
@@ -760,6 +880,100 @@ async def schedule_bump_reminders(guild: discord.Guild, bump_channel: discord.Te
         active_bump_tasks.pop(guild.id, None)
 
 # ==========================================
+# ONBOARDING: MODAL & DM VIEW
+# ==========================================
+class WelcomeProfileModal(discord.ui.Modal, title="Server Profile Setup"):
+    preferred_name = discord.ui.TextInput(
+        label="Preferred Name / Nickname",
+        placeholder="How should everyone address you?",
+        required=True,
+        max_length=32
+    )
+    gender_input = discord.ui.TextInput(
+        label="Gender / Pronouns",
+        placeholder="e.g. Male (He/Him), Female (She/Her), Non-Binary",
+        required=True,
+        max_length=30
+    )
+
+    def __init__(self, guild_id: int):
+        super().__init__()
+        self.guild_id = guild_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        guild = bot.get_guild(self.guild_id)
+        if not guild:
+            return await interaction.followup.send("❌ Server connection lost. Please setup inside a server channel.", ephemeral=True)
+
+        try:
+            member = guild.get_member(interaction.user.id) or await guild.fetch_member(interaction.user.id)
+        except (discord.NotFound, discord.HTTPException):
+            return await interaction.followup.send("❌ You are no longer present in this server.", ephemeral=True)
+
+        new_name = self.preferred_name.value.strip()
+        gender_raw = self.gender_input.value.strip()
+
+        # Update Server Nickname safely
+        nickname_updated = False
+        if guild.me.guild_permissions.manage_nicknames and guild.me.top_role > member.top_role and member.id != guild.owner_id:
+            try:
+                await member.edit(nick=new_name, reason="Onboarding self-setup")
+                nickname_updated = True
+            except (discord.Forbidden, discord.HTTPException):
+                nickname_updated = False
+
+        # Match & Assign Gender Role
+        matched_role_name = None
+        for key in GENDER_ROLE_PALETTE.keys():
+            if key.lower() in gender_raw.lower():
+                matched_role_name = key
+                break
+
+        assigned_role = None
+        if matched_role_name:
+            assigned_role = await ensure_role_exists(guild, matched_role_name, GENDER_ROLE_PALETTE[matched_role_name])
+            if assigned_role and guild.me.top_role > assigned_role:
+                try:
+                    await member.add_roles(assigned_role, reason="Onboarding Gender Selection")
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+        details = [f"• **Preferred Name:** `{new_name}`" + (" *(Nickname applied)*" if nickname_updated else "")]
+        if assigned_role:
+            details.append(f"• **Gender Role:** `{assigned_role.name}`")
+        else:
+            details.append(f"• **Gender / Pronouns:** `{gender_raw}`")
+
+        embed = discord.Embed(
+            title=f"✅ Welcome to {guild.name}!",
+            description="Your profile setup is complete!\n\n" + "\n".join(details) + "\n\nYou're all set to start chatting!",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+class WelcomeProfileButton(discord.ui.Button):
+    def __init__(self, guild_id: int):
+        super().__init__(
+            label="Set Name & Gender",
+            style=discord.ButtonStyle.success,
+            emoji="📝",
+            custom_id=f"persistent_onboard_btn_{guild_id}"
+        )
+        self.guild_id = guild_id
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(WelcomeProfileModal(guild_id=self.guild_id))
+
+class WelcomeProfileView(discord.ui.View):
+    def __init__(self, guild_id: int):
+        super().__init__(timeout=None)
+        self.guild_id = guild_id
+        self.add_item(WelcomeProfileButton(guild_id))
+
+# ==========================================
 # UI COMPONENTS & MODALS
 # ==========================================
 class ResignConfirmView(discord.ui.View):
@@ -770,7 +984,7 @@ class ResignConfirmView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.ctx.author.id:
-            await interaction.response.send_message("⛔ **Access Denied**: Only the person resigning can make this choice.", ephemeral=True)
+            await interaction.response.send_message("⛔ **Access Denied**: Only the member resigning can choose.", ephemeral=True)
             return False
         return True
 
@@ -787,7 +1001,7 @@ class ResignConfirmView(discord.ui.View):
         self.value = False
         for child in self.children:
             child.disabled = True
-        await interaction.response.edit_message(content="🛑 **Resignation Cancelled**: Your staff roles remain untouched.", embed=None, view=self)
+        await interaction.response.edit_message(content="🛑 **Resignation Cancelled**: Your roles remain untouched.", embed=None, view=self)
         self.stop()
 
 class RestoreConfirmView(discord.ui.View):
@@ -807,7 +1021,7 @@ class RestoreConfirmView(discord.ui.View):
         self.value = True
         for child in self.children:
             child.disabled = True
-        await interaction.response.edit_message(content="⏳ **Reading snapshot and restoring server data from `#bot-memory`...**", embed=None, view=self)
+        await interaction.response.edit_message(content="⏳ **Restoring server database from `#bot-memory`...**", embed=None, view=self)
         self.stop()
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️")
@@ -864,50 +1078,50 @@ class ProHexColorSelect(discord.ui.Select):
             discord.SelectOption(label="Pro Hex Pink", emoji="🌸", description="Equip pastel pink hex role"),
             discord.SelectOption(label="Pro Hex Yellow", emoji="🟡", description="Equip bright yellow hex role"),
             discord.SelectOption(label="Pro Hex Orange", emoji="🟠", description="Equip deep orange hex role"),
-            discord.SelectOption(label="Remove Color", emoji="✖️", description="Strip active custom color role")
+            discord.SelectOption(label="Remove Color", emoji="✖️", description="Strip your active color role")
         ]
         super().__init__(
-            placeholder="🎨 Select your Pro Hex Color Role...",
+            placeholder="🎨 Choose your name color...",
             min_values=1,
             max_values=1,
-            custom_id="persistent_team_color_select",
+            custom_id="persistent_member_color_select",
             options=options
         )
 
     async def callback(self, interaction: discord.Interaction):
         user = interaction.user
         guild = interaction.guild
-
-        if not is_team_member(user):
-            return await interaction.response.send_message("⛔ **Access Denied**: Pro Hex colors are reserved for **Team Members**.", ephemeral=True)
-
         selected_choice = self.values[0]
-        current_hex_roles = [r for r in user.roles if r.name in PRO_HEX_COLORS.keys()]
+
+        current_hex_roles = [r for r in user.roles if r.name in PRO_HEX_COLORS.keys() or r.name.startswith("Color-")]
 
         if selected_choice == "Remove Color":
             if current_hex_roles:
                 try:
-                    await user.remove_roles(*current_hex_roles, reason="Team color cleared by user")
-                    return await interaction.response.send_message("🗑️ **Color Removed**: Custom hex role cleared.", ephemeral=True)
+                    await user.remove_roles(*current_hex_roles, reason="Member cleared color role")
+                    return await interaction.response.send_message("🗑️ **Color Cleared**: Your color role has been removed.", ephemeral=True)
                 except discord.Forbidden:
                     return await interaction.response.send_message("❌ Missing permissions to manage roles.", ephemeral=True)
-            return await interaction.response.send_message("ℹ️ You do not currently hold an active Pro Hex role.", ephemeral=True)
+            return await interaction.response.send_message("ℹ️ You do not currently have a color role equipped.", ephemeral=True)
 
         target_role = discord.utils.get(guild.roles, name=selected_choice)
         if not target_role:
             color_obj = PRO_HEX_COLORS.get(selected_choice, discord.Color.default())
             target_role = await ensure_role_exists(guild, selected_choice, color_obj)
 
-        if not target_role or guild.me.top_role <= target_role:
-            return await interaction.response.send_message("❌ Hierarchy Error: Bot role must be higher than the color roles.", ephemeral=True)
+        if not target_role:
+            return await interaction.response.send_message("❌ Failed to initialize the requested color role.", ephemeral=True)
+
+        if guild.me.top_role <= target_role:
+            return await interaction.response.send_message("❌ Hierarchy Error: Move the bot's role higher in Server Settings > Roles.", ephemeral=True)
 
         try:
             if current_hex_roles:
-                await user.remove_roles(*current_hex_roles, reason="Switching Pro Hex color")
-            await user.add_roles(target_role, reason="Team Pro Hex selection")
-            await interaction.response.send_message(f"🎨 **Color Updated**: Equipped **{target_role.name}**!", ephemeral=True)
+                await user.remove_roles(*current_hex_roles, reason="Switching color role")
+            await user.add_roles(target_role, reason="Member self-assigned color")
+            await interaction.response.send_message(f"🎨 **Color Updated**: You are now styled with **{target_role.name}**!", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Permission error: Discord rejected role assignment.", ephemeral=True)
+            await interaction.response.send_message("❌ Permission error: Discord rejected the role assignment.", ephemeral=True)
 
 class ColorSelectView(discord.ui.View):
     def __init__(self):
@@ -915,7 +1129,7 @@ class ColorSelectView(discord.ui.View):
         self.add_item(ProHexColorSelect())
 
 # ==========================================
-# TICKET SYSTEM IMPLEMENTATION
+# SUPPORT TICKET CONTROLS & VIEWS
 # ==========================================
 class TicketCloseConfirmView(discord.ui.View):
     def __init__(self):
@@ -927,7 +1141,7 @@ class TicketCloseConfirmView(discord.ui.View):
         await asyncio.sleep(3)
         try:
             await interaction.channel.delete(reason=f"Ticket closed by {interaction.user}")
-        except discord.Forbidden:
+        except (discord.Forbidden, discord.HTTPException):
             pass
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️")
@@ -963,12 +1177,12 @@ class TicketControlView(discord.ui.View):
 
         await interaction.response.defer()
 
-        for target, overwrite in channel.overwrites.items():
+        for target, overwrite in list(channel.overwrites.items()):
             if isinstance(target, discord.Member) and target != guild.me and target.id != guild.owner_id:
                 overwrite.send_messages = False
                 try:
                     await channel.set_permissions(target, overwrite=overwrite)
-                except discord.Forbidden:
+                except (discord.Forbidden, discord.HTTPException):
                     pass
 
         clean_tag = channel.name.split("・")[-1] if "・" in channel.name else channel.name
@@ -976,16 +1190,16 @@ class TicketControlView(discord.ui.View):
 
         try:
             await channel.edit(name=new_name, category=locked_category)
-        except discord.Forbidden:
+        except (discord.Forbidden, discord.HTTPException):
             pass
 
         embed = discord.Embed(
             title="🔒 Ticket Locked & Archived",
             description=(
                 f"This ticket was locked by {user.mention}.\n\n"
-                f"• Member typing has been disabled (Read-Only).\n"
+                f"• Member typing disabled (Read-Only).\n"
                 f"• Transferred to: **{locked_category.name}**.\n"
-                f"• Leadership can review or click **Close Ticket** below to delete."
+                f"• Click **Close Ticket** below to delete."
             ),
             color=discord.Color.dark_grey(),
             timestamp=discord.utils.utcnow()
@@ -1038,23 +1252,22 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
             overwrites=overwrites,
             topic=f"Owner ID: {user.id} | Type: {title}"
         )
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException):
         return await interaction.response.send_message("❌ Bot lacks permission to create/manage channels.", ephemeral=True)
 
     embed = discord.Embed(
         title=f"{style['emoji']} {title}",
-        description=f"Welcome {user.mention}!\n\n{instructions}\n\n🔒 *This ticket is private between you, the Server Owner, Authority, and Administrators.*",
+        description=f"Welcome {user.mention}!\n\n{instructions}\n\n🔒 *This ticket is private between you, Server Owner, Authority, and Administrators.*",
         color=color,
         timestamp=discord.utils.utcnow()
     )
     embed.set_footer(text=f"Ticket Owner: {user.display_name} • Click Close when resolved")
 
     staff_ping_text = " ".join(set(ticket_staff_mentions)) if ticket_staff_mentions else ""
-
     await ticket_ch.send(content=f"{user.mention} {staff_ping_text}".strip(), embed=embed, view=TicketControlView())
     await interaction.response.send_message(f"✅ **Ticket Created!** Go to {ticket_ch.mention}.", ephemeral=True)
 
-async def build_and_send_ticket(guild: discord.Guild, user: discord.Member, topic: str = "General Inquiry") -> discord.TextChannel:
+async def build_and_send_ticket(guild: discord.Guild, user: discord.Member, topic: str = "General Inquiry") -> Optional[discord.TextChannel]:
     category = await get_or_create_ticket_category(guild)
 
     overwrites = {
@@ -1076,12 +1289,15 @@ async def build_and_send_ticket(guild: discord.Guild, user: discord.Member, topi
     clean_username = "".join(c for c in user.name.lower() if c.isalnum())[:10]
     channel_name = f"🎫・ticket-{clean_username}"
 
-    ticket_ch = await guild.create_text_channel(
-        name=channel_name,
-        category=category,
-        overwrites=overwrites,
-        topic=f"Owner ID: {user.id} | Subject: {topic}"
-    )
+    try:
+        ticket_ch = await guild.create_text_channel(
+            name=channel_name,
+            category=category,
+            overwrites=overwrites,
+            topic=f"Owner ID: {user.id} | Subject: {topic}"
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        return None
 
     embed = discord.Embed(
         title="🎫 Support Ticket Opened",
@@ -1116,7 +1332,7 @@ class TicketLauncherView(discord.ui.View):
             instructions=(
                 "**Thank you for your interest in joining our team!**\n"
                 "Please provide the following details:\n"
-                "• Role you are applying for (Moderator / Event Staff)\n"
+                "• Role applying for (Moderator / Event Staff)\n"
                 "• Your age & timezone\n"
                 "• Previous moderation experience\n"
                 "• Approximate weekly hours available"
@@ -1150,9 +1366,9 @@ class TicketLauncherView(discord.ui.View):
         )
 
 # ==========================================
-# CENTRAL COMMAND MANUAL PUBLISHER
+# CENTRAL MANUAL PUBLISHER
 # ==========================================
-async def publish_or_update_botcommands(guild: discord.Guild, update_note: str = None) -> discord.Message:
+async def publish_or_update_botcommands(guild: discord.Guild, update_note: str = None) -> Optional[discord.Message]:
     cmd_ch = await get_or_create_bot_commands_channel(guild)
     if not cmd_ch:
         return None
@@ -1180,10 +1396,10 @@ async def publish_or_update_botcommands(guild: discord.Guild, update_note: str =
     embed.add_field(
         name="🎖️ Leveling & Member Perks (#bot-commands)",
         value=(
-            "`.level [@user]` — Check rank, level tier & XP progression.\n"
+            "`.level [@user]` — Check rank, level tier, and progress bar.\n"
             "`.leaderboard` — Display top 10 ranked server members.\n"
             "`.tenure [@user]` — Check exact join date & time in server.\n"
-            "`.color <name>` — Equip a custom colored hex role.\n"
+            "`.color <preset/#HEX>` — Equip custom color role in chat.\n"
             "`.userinfo [@user]` — View member profile, joins & strikes.\n"
             "`.serverinfo` — Show guild analytics & member count.\n"
             "`.afk [reason]` — Toggle AFK status with automated ping alerts."
@@ -1195,7 +1411,7 @@ async def publish_or_update_botcommands(guild: discord.Guild, update_note: str =
         name="👑 Old (OG) Veteran System",
         value=(
             "`.old [@user]` — Check if a member qualifies for OG status (365+ days).\n"
-            "`.old auto` — Auto-scan server roster & assign the OG role to 1yr+ members.\n"
+            "`.old auto` — Auto-scan server roster & assign OG role to 1yr+ members.\n"
             "`.old manual @user` — Staff override to grant OG status directly.\n"
             "`.old remove @user` — Staff override to revoke OG status.\n"
             "`.old list` — Display all members currently holding the OG role."
@@ -1210,8 +1426,7 @@ async def publish_or_update_botcommands(guild: discord.Guild, update_note: str =
             "`.createticket [reason]` — Manually open a dedicated ticket channel.\n"
             "• **💼 Join Team** — Private staff/moderator application.\n"
             "• **⚠️ File Complaint** — Report a user or server violation.\n"
-            "• **❓ General Support** — Inquiries & general assistance.\n"
-            "*(Access strictly locked to Creator, Server Owner, Authority & Admins)*"
+            "• **❓ General Support** — Inquiries & general assistance."
         ),
         inline=False
     )
@@ -1220,7 +1435,7 @@ async def publish_or_update_botcommands(guild: discord.Guild, update_note: str =
         name="🚦 Anonymous Confessions (#confession)",
         value=(
             "`.confesspanel` — Post the interactive secret confession button.\n"
-            "`.confess <message>` — Submit an anonymous confession (message auto-deletes)."
+            "`.confess <message>` — Submit an anonymous confession (auto-deleted)."
         ),
         inline=False
     )
@@ -1229,7 +1444,7 @@ async def publish_or_update_botcommands(guild: discord.Guild, update_note: str =
         name="🚀 Server Growth & Birthdays",
         value=(
             "`.bump` — Bump the server (+200 XP, 2h timer & pings `@BumpPings`).\n"
-            "`.setbirthday DD-MM[-YYYY]` — Register your birthday for celebration bonuses.\n"
+            "`.setbirthday DD-MM[-YYYY]` — Register birthday for celebration bonuses.\n"
             "`.birthday [@user]` — Look up a registered birthday date."
         ),
         inline=False
@@ -1239,14 +1454,14 @@ async def publish_or_update_botcommands(guild: discord.Guild, update_note: str =
         name="🔒 Staff & Role Administration",
         value=(
             "`.promote @user <Role>` — Promote a staff member.\n"
-            "`.resign [reason]` — Step down from staff roles (interactive Yes/No prompt).\n"
+            "`.resign [reason]` — Step down from staff roles (interactive prompt).\n"
             "`.authority @user` — Assign the core Authority staff role.\n"
             "`.assign @user <Role>` / `.revoke @user <Role>` — Manage roles.\n"
             "`.role addall <Role>` / `.role removeall <Role>` — Mass role management.\n"
             "`.role members <Role>` — View non-bot members holding a role.\n"
             "`.autorole_setup` — Initialize tier roles, colors, and `BumpPings`.\n"
-            "`.colorpanel` — Post the Pro Hex team color dropdown in `#colours`.\n"
-            "`.createrole <Name> <Hex>` / `.deleterole <Role>` — Custom role creation."
+            "`.colorpanel` — Post member color dropdown in `#colours`.\n"
+            "`.welcomesetup` — Post persistent onboarding card in `#welcome`."
         ),
         inline=False
     )
@@ -1267,13 +1482,13 @@ async def publish_or_update_botcommands(guild: discord.Guild, update_note: str =
     )
 
     embed.add_field(
-        name="💾 System & Maintenance Engine",
+        name="💾 System & Maintenance Engine (Admin Only)",
         value=(
-            "`.savedata` — Save snapshot to `#bot-memory` (retains newest 3, deletes older).\n"
-            "`.restoredata [index]` — Safe smart restore (auto-skips 0-XP snapshots).\n"
-            "`.backups` — List all historical backups in `#bot-memory` with index IDs.\n"
-            "`.cleanbackups [keep]` — Delete old/duplicate backup messages from `#bot-memory`.\n"
-            "`.maintenance on/off` — Freeze activity and secure state for bot updates.\n"
+            "`.savedata` — Save snapshot to `#bot-memory`.\n"
+            "`.restoredata [index]` — Smart restore (skips 0-XP snapshots).\n"
+            "`.backups` — List all historical backups in `#bot-memory`.\n"
+            "`.cleanbackups [keep]` — Delete old backup messages from `#bot-memory`.\n"
+            "`.maintenance on/off` — Freeze activity and secure state for updates.\n"
             "`.restart` — Safe pre-backup snapshot & in-place bot process reboot.\n"
             "`.botcommands [note]` — Refresh manual directory & purge outdated post."
         ),
@@ -1297,6 +1512,9 @@ async def on_ready():
     bot.add_view(ConfessionButtonView())
     bot.add_view(ColorSelectView())
 
+    for guild in bot.guilds:
+        bot.add_view(WelcomeProfileView(guild.id))
+
     print(f"Logged in as {bot.user.name} (ID: {bot.user.id})")
     print(f"System Creator: {BOT_CREATOR_USERNAME} ({BOT_CREATOR_REAL_NAME}) | {BOT_COMPANY_NAME}")
 
@@ -1313,18 +1531,25 @@ async def on_ready():
         await get_or_create_birthday_channel(guild)
         await get_or_create_bump_role(guild)
         await get_or_create_confession_channel(guild)
+        await get_or_create_welcome_channel(guild)
         await get_or_create_ticket_category(guild)
         await get_or_create_locked_ticket_category(guild)
+        await get_or_create_memory_channel(guild)
 
         colors_ch = await get_or_create_colors_channel(guild)
         if colors_ch:
             history = [m async for m in colors_ch.history(limit=5)]
             if not any(m.author.id == bot.user.id and m.embeds for m in history):
                 c_embed = discord.Embed(
-                    title="🎨 Team Member Color Customization",
-                    description="All **Team Members** (Staff, Authority & Admins) can select a custom **Pro Hex Color** below.\n\nUse the dropdown menu below to choose or remove your color.",
+                    title="🎨 Server Name Color Station",
+                    description=(
+                        "Personalize your username color in chat!\n\n"
+                        "Select any **Pro Hex Color** from the dropdown menu below to change your name color.\n\n"
+                        "💡 *You can also type `.color #HEXCODE` in `#bot-commands` for custom colors.*"
+                    ),
                     color=discord.Color.gold()
                 )
+                c_embed.set_footer(text=f"{guild.name} Customization • {BOT_COMPANY_NAME}")
                 await colors_ch.send(embed=c_embed, view=ColorSelectView())
 
         announcement_ch = await get_or_create_announcement_channel(guild)
@@ -1339,6 +1564,10 @@ async def on_ready():
                     user_xp[guild.id][member.id] = 0
 
         await publish_or_update_botcommands(guild, update_note="System rebooted online. Modules synchronized.")
+
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    bot.add_view(WelcomeProfileView(guild.id))
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -1359,15 +1588,65 @@ async def on_command_error(ctx, error):
 async def on_member_join(member: discord.Member):
     if member.bot:
         return
-    gid = member.guild.id
+
+    guild = member.guild
+    gid = guild.id
+
+    # 1. Progression Baseline
     user_levels[gid][member.id] = 1
     user_xp[gid][member.id] = 0
-
     await update_member_level_role(member, 1)
 
-    announcement_ch = await get_or_create_announcement_channel(member.guild)
-    if announcement_ch:
-        await announcement_ch.send(f"👋 Welcome to the server, {member.mention}! You've been assigned **Newbie** (Level 1).")
+    onboard_view = WelcomeProfileView(guild_id=guild.id)
+
+    # 2. Build Private DM Card
+    dm_embed = discord.Embed(
+        title=f"🌸 Welcome to {guild.name}!",
+        description=(
+            f"Hey {member.name}, welcome! 🎉\n\n"
+            "To help everyone address you properly, please take 5 seconds to set up your server profile:\n\n"
+            "• **Preferred Name / Nickname**\n"
+            "• **Gender / Pronoun Role**\n\n"
+            "Click the button below to fill out your details:"
+        ),
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow()
+    )
+    dm_embed.set_thumbnail(url=member.display_avatar.url)
+    dm_embed.set_footer(text=f"{guild.name} Onboarding • {BOT_COMPANY_NAME}")
+
+    dm_delivered = False
+    try:
+        await member.send(embed=dm_embed, view=onboard_view)
+        dm_delivered = True
+    except (discord.Forbidden, discord.HTTPException):
+        dm_delivered = False
+
+    # 3. Public Announcement in #welcome
+    welcome_ch = await get_or_create_welcome_channel(guild)
+    if welcome_ch:
+        total_members = guild.member_count
+        public_embed = discord.Embed(
+            title=f"👋 Welcome to {guild.name}!",
+            description=(
+                f"Welcome {member.mention}! You are member **#{total_members}**.\n\n"
+                + ("📬 **Check your DMs!** We sent you a quick setup prompt." if dm_delivered 
+                   else "⚠️ **Your DMs are closed!** Click the button below to set up your nickname and gender:")
+            ),
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow()
+        )
+        public_embed.set_thumbnail(url=member.display_avatar.url)
+        public_embed.set_footer(text=f"Welcome • {BOT_COMPANY_NAME}")
+
+        try:
+            await welcome_ch.send(
+                content=f"Welcome {member.mention}!",
+                embed=public_embed,
+                view=onboard_view
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -1382,6 +1661,7 @@ async def on_message(message: discord.Message):
     gid = message.guild.id
     now_ts = datetime.datetime.now(datetime.timezone.utc).timestamp()
 
+    # Disboard Bump Event Verification
     if message.author.id == DISBOARD_BOT_ID:
         bump_ch = await get_or_create_bump_channel(message.guild)
         if bump_ch and message.channel.id == bump_ch.id and message.embeds:
@@ -1419,28 +1699,38 @@ async def on_message(message: discord.Message):
     uid = message.author.id
     current_time = asyncio.get_event_loop().time()
 
+    # 1. Clear AFK status on return
     if uid in afk_users[gid] and not message.content.startswith(".afk"):
         del afk_users[gid][uid]
-        welcome_back = f"👋 Welcome back {message.author.mention}, your AFK status has been cleared."
+        welcome_line = random.choice(AFK_WELCOME_BACK_MESSAGES).format(mention=message.author.mention)
+        
         if uid in afk_mentions[gid] and afk_mentions[gid][uid]:
             missed = "\n".join(afk_mentions[gid][uid][-5:])
-            welcome_back += f"\n\n📬 **Missed Pings (Last 5):**\n{missed}"
+            welcome_line += f"\n\n📬 **Here are the pings you missed (Last 5):**\n{missed}"
             del afk_mentions[gid][uid]
-        await message.channel.send(welcome_back)
 
+        await message.channel.send(welcome_line)
+
+    # 2. XP Distribution (Fast/Dynamic 20-35 XP)
     last_xp = last_xp_awarded[gid].get(uid, 0.0)
     if current_time - last_xp >= XP_COOLDOWN_SECONDS:
         last_xp_awarded[gid][uid] = current_time
-        await add_xp(message.author, 15)
+        earned_xp = random.randint(MIN_XP_PER_MSG, MAX_XP_PER_MSG)
+        await add_xp(message.author, earned_xp)
 
+    # 3. Notify chat if someone pings an AFK member
     if message.mentions:
         for target in message.mentions:
             if target.id in afk_users[gid] and target.id != uid:
-                reason = afk_users[gid][target.id]
+                user_reason = afk_users[gid][target.id]
                 afk_mentions[gid][target.id].append(
                     f"• {message.author.display_name} in {message.channel.mention}: {message.clean_content}"
                 )
-                await message.channel.send(f"ℹ️ {target.display_name} is currently AFK: **{reason}**")
+                ping_notice = random.choice(AFK_PING_TEMPLATES).format(
+                    name=f"**{target.display_name}**",
+                    reason=user_reason
+                )
+                await message.channel.send(ping_notice)
 
     await bot.process_commands(message)
 
@@ -1512,7 +1802,7 @@ async def view_birthday(ctx, member: discord.Member = None):
 # ==========================================
 # COMMANDS: LEVELING & TENURE / OG SUITE
 # ==========================================
-@bot.command(name="level")
+@bot.command(name="level", aliases=["rank"])
 async def check_level(ctx, member: discord.Member = None):
     cmd_ch = await get_or_create_bot_commands_channel(ctx.guild)
     if cmd_ch and ctx.channel.id != cmd_ch.id:
@@ -1522,13 +1812,30 @@ async def check_level(ctx, member: discord.Member = None):
     gid = ctx.guild.id
     lvl = user_levels[gid].get(target.id, 1)
     xp = user_xp[gid].get(target.id, 0)
+    needed = get_xp_for_level(lvl)
     tier_data = get_tier_info_for_level(lvl)
 
     if lvl >= MAX_LEVEL:
-        await ctx.send(f"⭐ {target.display_name} is at maximum **Level {MAX_LEVEL}**! Tier: **{tier_data['name']}** ({xp} XP).")
+        bar = "🟩" * 10
+        progress_text = "Max Level Reached"
     else:
-        needed = get_xp_for_level(lvl)
-        await ctx.send(f"📊 {target.display_name}: **Level {lvl}** | Tier: **{tier_data['name']}** ({xp} / {needed} XP).")
+        pct = min(int((xp / needed) * 100), 100)
+        filled = min(int(pct / 10), 10)
+        bar = "🟩" * filled + "⬛" * (10 - filled)
+        progress_text = f"{xp:,} / {needed:,} XP ({pct}%)"
+
+    embed = discord.Embed(
+        title=f"📊 Rank Overview — {target.display_name}",
+        color=tier_data["color"],
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.add_field(name="Current Level", value=f"**Level {lvl}**", inline=True)
+    embed.add_field(name="Active Tier", value=f"**{tier_data['name']}**", inline=True)
+    embed.add_field(name="Progress to Next Tier", value=f"`{bar}`\n{progress_text}", inline=False)
+    embed.set_footer(text=f"{ctx.guild.name} Progression • {BOT_COMPANY_NAME}")
+
+    await ctx.send(embed=embed)
 
 @bot.command(name="leaderboard")
 async def show_leaderboard(ctx):
@@ -1657,8 +1964,8 @@ async def old_auto_sync(ctx):
                 try:
                     await member.add_roles(og_role, reason="Auto-Scan: Server tenure milestone (365+ days)")
                     newly_awarded += 1
-                    await asyncio.sleep(0.2)
-                except discord.Forbidden:
+                    await asyncio.sleep(0.25)
+                except (discord.Forbidden, discord.HTTPException):
                     continue
 
     embed = discord.Embed(
@@ -1762,10 +2069,11 @@ async def sync_levels(ctx):
             lvl = user_levels[ctx.guild.id].get(member.id, 1)
             await update_member_level_role(member, lvl)
             synced += 1
+            await asyncio.sleep(0.1)
     await ctx.send(f"✅ Synchronized level tier roles for **{synced} member(s)**.")
 
 # ==========================================
-# COMMANDS: INTERACTIVE PANELS (TICKETS/CONFESSIONS/COLORS)
+# COMMANDS: INTERACTIVE PANELS (TICKETS/CONFESSIONS/COLORS/WELCOME)
 # ==========================================
 @bot.command(name="ticketpanel")
 @is_admin_or_owner()
@@ -1794,7 +2102,10 @@ async def manual_create_ticket(ctx, member: discord.Member = None, *, reason: st
     target_user = member if (member and ctx.author.guild_permissions.administrator) else ctx.author
     status_msg = await ctx.send(f"⏳ Creating ticket channel for {target_user.mention}...")
     ticket_ch = await build_and_send_ticket(ctx.guild, target_user, topic=reason)
-    await status_msg.edit(content=f"✅ **Ticket Created!** Go to {ticket_ch.mention}.")
+    if ticket_ch:
+        await status_msg.edit(content=f"✅ **Ticket Created!** Go to {ticket_ch.mention}.")
+    else:
+        await status_msg.edit(content="❌ Failed to create ticket. Check bot permissions.")
 
 @bot.command(name="confesspanel")
 @is_admin_or_owner()
@@ -1854,51 +2165,111 @@ async def post_color_panel(ctx):
         return await ctx.send("❌ Could not locate or create the `#colours` channel.")
 
     embed = discord.Embed(
-        title="🎨 Team Member Color Customization",
+        title="🎨 Server Name Color Station",
         description=(
-            "Welcome to the official Team Styling station!\n\n"
-            "All **Team Members** (Staff, Authority & Admins) can select a custom **Pro Hex Color** below to style their username.\n\n"
-            "**Available Pro Hex Palette:**\n"
+            "Personalize your username color in chat!\n\n"
+            "Use the dropdown menu below to equip any of our featured **Pro Hex** colors or remove your active color at any time.\n\n"
+            "**Available Colors:**\n"
             "🔴 `Pro Hex Red`\n"
             "🟢 `Pro Hex Green`\n"
             "🔵 `Pro Hex Blue`\n"
             "🌸 `Pro Hex Pink`\n"
             "🟡 `Pro Hex Yellow`\n"
             "🟠 `Pro Hex Orange`\n\n"
-            "*Use the dropdown menu below to choose or remove your color.*"
+            "💡 *Looking for a custom color? Use `.color #HEXCODE` in `#bot-commands`!*"
         ),
         color=discord.Color.gold()
     )
-    embed.set_footer(text=f"Authorized Team Styling • {BOT_COMPANY_NAME}")
+    embed.set_footer(text=f"{ctx.guild.name} Styling • {BOT_COMPANY_NAME}")
     await colors_ch.send(embed=embed, view=ColorSelectView())
     if ctx.channel.id != colors_ch.id:
         await ctx.send(f"✅ Color panel placed in {colors_ch.mention}.")
 
-@bot.command(name="color")
-async def set_color(ctx, *, color_name: str):
+@bot.command(name="welcomesetup", aliases=["postwelcome"])
+@is_admin_or_owner()
+async def post_welcome_panel(ctx):
+    welcome_ch = await get_or_create_welcome_channel(ctx.guild)
+    if not welcome_ch:
+        return await ctx.send("❌ Could not locate or create the `#welcome` channel.")
+
+    embed = discord.Embed(
+        title="🌟 Welcome & Profile Setup Station",
+        description=(
+            "Welcome to all new members!\n\n"
+            "Please click the **Set Name & Gender** button below to introduce yourself:\n"
+            "• Sets your server nickname\n"
+            "• Assigns your preferred gender/pronoun role\n\n"
+            "🔒 *Your submission is processed privately and can be updated anytime.*"
+        ),
+        color=discord.Color.gold()
+    )
+    embed.set_footer(text=f"{ctx.guild.name} Onboarding • {BOT_COMPANY_NAME}")
+
+    await welcome_ch.send(embed=embed, view=WelcomeProfileView(ctx.guild.id))
+    if ctx.channel.id != welcome_ch.id:
+        await ctx.send(f"✅ Onboarding card posted in {welcome_ch.mention}.")
+
+@bot.command(name="color", aliases=["colour", "setcolor"])
+async def set_color(ctx, *, color_input: str):
     cmd_ch = await get_or_create_bot_commands_channel(ctx.guild)
     if cmd_ch and ctx.channel.id != cmd_ch.id:
-        return await ctx.send(f"❌ Color roles can only be selected in {cmd_ch.mention}.")
+        return await ctx.send(f"❌ Color roles can only be chosen in {cmd_ch.mention}.")
+
+    author = ctx.author
+    guild = ctx.guild
+    color_input = color_input.strip()
+
+    current_colors = [r for r in author.roles if r.name in PRO_HEX_COLORS.keys() or r.name.startswith("Color-")]
+
+    if color_input.lower() in ["remove", "clear", "none"]:
+        if current_colors:
+            await author.remove_roles(*current_colors, reason="Member cleared color role")
+            return await ctx.send(f"🗑️ Cleared color role from {author.mention}.")
+        return await ctx.send("ℹ️ You don't have an active color role equipped.")
 
     matched_role_name = None
     for name in PRO_HEX_COLORS.keys():
-        if color_name.lower() in name.lower():
+        if color_input.lower() in name.lower():
             matched_role_name = name
             break
 
-    if not matched_role_name:
-        return await ctx.send(f"❌ Invalid selection. Available: {', '.join(PRO_HEX_COLORS.keys())}")
+    target_role = None
+    if matched_role_name:
+        target_role = discord.utils.get(guild.roles, name=matched_role_name)
+        if not target_role:
+            target_role = await ensure_role_exists(guild, matched_role_name, PRO_HEX_COLORS[matched_role_name])
+    else:
+        clean_hex = color_input.lstrip("#")
+        if len(clean_hex) == 6 and all(c in "0123456789abcdefABCDEF" for c in clean_hex):
+            try:
+                hex_val = int(clean_hex, 16)
+                role_name = f"Color-#{clean_hex.upper()}"
+                target_role = discord.utils.get(guild.roles, name=role_name)
+                if not target_role:
+                    target_role = await guild.create_role(
+                        name=role_name,
+                        color=discord.Color(hex_val),
+                        reason=f"Custom color requested by {author}"
+                    )
+            except (ValueError, discord.Forbidden):
+                return await ctx.send("❌ Failed to process hex code. Ensure bot has `Manage Roles`.")
+        else:
+            options_list = ", ".join([k.replace("Pro Hex ", "") for k in PRO_HEX_COLORS.keys()])
+            return await ctx.send(f"❌ Invalid color. Choose a preset (`{options_list}`) or enter a valid hex (e.g. `.color #FF5733`).")
 
-    role = discord.utils.get(ctx.guild.roles, name=matched_role_name)
-    if not role:
-        return await ctx.send(f"❌ Role `{matched_role_name}` is not initialized. Run `.autorole_setup`.")
+    if not target_role:
+        return await ctx.send("❌ Could not create or assign that color role.")
 
-    active_colors = [r for r in ctx.author.roles if r.name in PRO_HEX_COLORS.keys()]
-    if active_colors:
-        await ctx.author.remove_roles(*active_colors)
+    if guild.me.top_role <= target_role:
+        return await ctx.send("❌ Hierarchy Error: Move the bot's role higher in Server Settings > Roles.")
 
-    await ctx.author.add_roles(role)
-    await ctx.send(f"🎨 Assigned **{role.name}** to {ctx.author.mention}!")
+    try:
+        if current_colors:
+            await author.remove_roles(*current_colors, reason="Updating color role")
+        await author.add_roles(target_role, reason="Color role equipped")
+        await ctx.send(f"🎨 {author.mention} equipped **{target_role.name}**!")
+    except discord.Forbidden:
+        await ctx.send("❌ Discord rejected the role assignment due to role hierarchy.")
 
 # ==========================================
 # COMMANDS: STAFF MANAGEMENT & RESIGNATION
@@ -2046,8 +2417,8 @@ async def add_role_to_all(ctx, *, role: discord.Role):
             try:
                 await member.add_roles(role, reason="Mass Role Add")
                 count += 1
-                await asyncio.sleep(0.5)
-            except discord.Forbidden:
+                await asyncio.sleep(0.3)
+            except (discord.Forbidden, discord.HTTPException):
                 continue
     await status.edit(content=f"✅ Completed: Added `{role.name}` to **{count}** members.")
 
@@ -2063,8 +2434,8 @@ async def remove_role_from_all(ctx, *, role: discord.Role):
         try:
             await member.remove_roles(role, reason="Mass Role Remove")
             count += 1
-            await asyncio.sleep(0.5)
-        except discord.Forbidden:
+            await asyncio.sleep(0.3)
+        except (discord.Forbidden, discord.HTTPException):
             continue
     await status.edit(content=f"✅ Completed: Removed `{role.name}` from **{count}** members.")
 
@@ -2110,6 +2481,9 @@ async def auto_role_setup(ctx):
 
     for color_name, color_obj in PRO_HEX_COLORS.items():
         await ensure_role_exists(guild, color_name, color_obj)
+
+    for gender_name, gender_color in GENDER_ROLE_PALETTE.items():
+        await ensure_role_exists(guild, gender_name, gender_color)
 
     await status.edit(content="✅ Auto-Role architecture initialized successfully!")
 
@@ -2191,7 +2565,7 @@ async def warn(ctx, member: discord.Member, *, reason: str = "No reason specifie
             await member.ban(reason=f"Reached 3 warnings. Latest: {reason}")
             await ctx.send(f"🔨 **AUTO-BAN EXECUTION**: {member.mention} reached 3 strikes.")
         except discord.Forbidden:
-            await ctx.send("❌ Failed to auto-ban {member.mention}: Missing clearance.")
+            await ctx.send(f"❌ Failed to auto-ban {member.mention}: Missing clearance.")
 
 @bot.command(name="clearwarns")
 @commands.has_permissions(kick_members=True)
@@ -2300,13 +2674,13 @@ async def vc_move_user(ctx, member: discord.Member, target_channel: discord.Voic
     await ctx.send(f"🚚 Moved {member.mention} to **{target_channel.name}**.")
 
 # ==========================================
-# COMMANDS: SYSTEM, DATA & MAINTENANCE
+# COMMANDS: SYSTEM, DATA & MAINTENANCE (ADMIN RESTRICTED)
 # ==========================================
 @bot.command(name="savedata")
-@is_admin_or_higher()
+@is_admin_or_owner()
 async def force_save(ctx):
     await save_data_to_channel(ctx.guild)
-    await ctx.send("💾 State snapshot safely committed to `#bot-memory`.")
+    await ctx.send("💾 State snapshot safely committed to `#bot-memory` (Admin authorized).")
 
 @bot.command(name="backups", aliases=["backuplist"])
 @is_admin_or_owner()
@@ -2325,8 +2699,8 @@ async def list_available_backups(ctx):
         return await ctx.send("ℹ️ No JSON backup files located in `#bot-memory`.")
 
     embed = discord.Embed(
-        title="💾 Available Server Backups",
-        description="To restore a specific backup, run `.restoredata <Index>` (e.g., `.restoredata 0` for newest).",
+        title="💾 Available Server Backups (Admin Restricted)",
+        description="To restore a specific backup, run `.restoredata <Index>` (e.g., `.restoredata 0`).",
         color=discord.Color.blue(),
         timestamp=discord.utils.utcnow()
     )
@@ -2335,7 +2709,7 @@ async def list_available_backups(ctx):
         unix = int(created.timestamp())
         embed.add_field(
             name=f"[{idx}] {fname}",
-            value=f"📅 <t:{unix}:f> (<t:{unix}:R>)\n👤 Uploaded by: `{author}`",
+            value=f"📅 <t:{unix}:f> (<t:{unix}:R>)\n👤 Saved by: `{author}`",
             inline=False
         )
 
@@ -2350,7 +2724,7 @@ async def clean_old_backups(ctx, keep_newest: int = 1):
 
 @bot.command(name="restoredata", aliases=["loaddata", "recoverdata"])
 @is_admin_or_owner()
-async def force_restore_data(ctx, backup_index: int = None):
+async def force_restore_data(ctx, backup_index: Optional[int] = None):
     uploaded_file = ctx.message.attachments[0] if ctx.message.attachments else None
 
     target_desc = (
@@ -2361,7 +2735,7 @@ async def force_restore_data(ctx, backup_index: int = None):
 
     view = RestoreConfirmView(ctx)
     embed = discord.Embed(
-        title="⚠️ Database Recovery Confirmation",
+        title="⚠️ Database Recovery Confirmation (Admin Restricted)",
         description=(
             f"Restoring will overwrite current session data from {target_desc}.\n\n"
             "• All XP, levels, warnings, birthdays, and anniversaries will be updated.\n"
@@ -2555,9 +2929,26 @@ async def bump(ctx):
     active_bump_tasks[gid] = asyncio.create_task(schedule_bump_reminders(ctx.guild, bump_ch))
 
 @bot.command(name="afk")
-async def afk(ctx, *, reason="AFK"):
-    afk_users[ctx.guild.id][ctx.author.id] = reason
-    await ctx.send(f"💤 {ctx.author.mention} is now AFK: **{reason}**")
+async def afk(ctx, *, reason: str = None):
+    gid = ctx.guild.id
+    uid = ctx.author.id
+
+    chosen_reason = reason.strip() if reason else random.choice(AFK_DEFAULT_REASONS)
+    afk_users[gid][uid] = chosen_reason
+    afk_mentions[gid][uid].clear()
+
+    embed = discord.Embed(
+        title="💤 AFK Status Activated",
+        description=(
+            f"{ctx.author.mention} is now resting away from chat.\n\n"
+            f"📌 **Status / Reason:**\n> *\"{chosen_reason}\"*\n\n"
+            "💌 *I'll quietly collect any pings you miss while you're away!*"
+        ),
+        color=discord.Color.from_rgb(255, 182, 193),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_footer(text="Send any message in chat when you return to clear this status!")
+    await ctx.send(embed=embed)
 
 @bot.command(name="userinfo")
 async def user_info(ctx, member: discord.Member = None):
