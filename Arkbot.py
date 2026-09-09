@@ -283,10 +283,6 @@ def normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
     return " ".join(text.split()).strip().lower()
 
-def clean_slug(name: str) -> str:
-    cleaned = re.sub(r"[^\w\s]", "", name)
-    return " ".join(cleaned.split()).strip().lower()
-
 def find_role_resilient(guild: discord.Guild, target_name: str) -> Optional[discord.Role]:
     clean_target = normalize_text(target_name)
     for role in guild.roles:
@@ -326,10 +322,11 @@ def is_staff_member(member: discord.Member) -> bool:
     return not user_roles.isdisjoint(allowed)
 
 # ==============================================================================
-# 3. DATABASE STATE & MEMORY ENGINE (#bot-memory)
+# 3. DATABASE STATE & MEMORY RETENTION (#bot-memory: 3-file rolling retention)
 # ==============================================================================
 
 memory_lock = asyncio.Lock()
+active_bump_tasks: Dict[int, asyncio.Task] = {}
 
 def default_server_state() -> Dict[str, Any]:
     return {
@@ -358,7 +355,7 @@ def migrate_state_payload(data: dict) -> dict:
     if "users" in data and isinstance(data["users"], dict):
         for uid, udata in data["users"].items():
             if isinstance(udata, dict):
-                base["user_xp"].setdefault(str(uid), udata.get("total_xp", udata.get("xp", 0)))
+                base["user_xp"].setdefault(str(uid), udata.get("xp", 0))
                 base["user_levels"].setdefault(str(uid), udata.get("level", 1))
     if "afk" in data and isinstance(data["afk"], dict):
         base["afk_users"].update(data["afk"])
@@ -386,12 +383,27 @@ async def save_state_to_memory(guild: discord.Guild, memory_channel_name: str = 
         filename = f"backup_{guild.id}.json"
         
         try:
-            await channel.purge(limit=15)
             timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
             await channel.send(
                 content=f"💾 **[DATABASE STATE SYNC]** `{timestamp_str}`",
                 file=discord.File(file_bytes, filename=filename)
             )
+
+            # Rolling Retention: Keep strictly the 3 newest backup posts
+            backup_messages = []
+            async for msg in channel.history(limit=35):
+                if msg.attachments and any(a.filename.endswith(".json") for a in msg.attachments):
+                    backup_messages.append(msg)
+                elif "DATABASE STATE SYNC" in msg.content:
+                    backup_messages.append(msg)
+
+            if len(backup_messages) > 3:
+                for old_msg in backup_messages[3:]:
+                    try:
+                        await old_msg.delete()
+                        await asyncio.sleep(0.3)
+                    except Exception:
+                        pass
         except (discord.Forbidden, discord.HTTPException):
             pass
 
@@ -590,12 +602,14 @@ async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool =
     curr_xp = state["user_xp"].get(uid_str, 0) + xp_amount
     curr_lvl = state["user_levels"].get(uid_str, 1)
 
-    state["user_xp"][uid_str] = curr_xp
     needed_xp = curr_lvl * 300
 
+    # Handle tier progression up to MAX_LEVEL
     if curr_lvl < MAX_LEVEL and curr_xp >= needed_xp:
         curr_lvl += 1
+        curr_xp -= needed_xp
         state["user_levels"][uid_str] = curr_lvl
+        state["user_xp"][uid_str] = curr_xp
         await sync_member_level_tier(member, curr_lvl)
 
         ann_ch = discord.utils.find(lambda c: "level-announcements" in normalize_text(c.name), guild.text_channels)
@@ -610,6 +624,8 @@ async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool =
             await ann_ch.send(content=f"🎉 {member.mention}", embed=embed)
 
         await save_state_to_memory(guild, data=state)
+    else:
+        state["user_xp"][uid_str] = curr_xp
 
 # ==============================================================================
 # 6. INTERACTIVE PANELS, MODALS & VIEWS
@@ -819,7 +835,7 @@ class TicketLaunchView(discord.ui.View):
             await interaction.followup.send("❌ Could not create ticket channel.", ephemeral=True)
 
 # ==============================================================================
-# 7. BOT CLIENT SETUP & BACKGROUND TASKS
+# 7. BOT CLIENT SETUP & AUTOMATED LOOPS
 # ==============================================================================
 
 class ChillVerseBot(commands.Bot):
@@ -914,29 +930,40 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
         pass
 
 # ==============================================================================
-# 8. LISTENERS
+# 8. BUMP SCHEDULER & LISTENERS
 # ==============================================================================
 
 async def schedule_bump_reminder(guild: discord.Guild, channel: Optional[discord.TextChannel] = None):
-    state = bot.server_state.setdefault(guild.id, default_server_state())
-    last_bump = state.get("last_bump_time", 0.0)
-    now = time.time()
-    remaining = max(0, int(7200 - (now - last_bump)))
+    # Idempotent task runner: cancel any previous duplicate bump task for this guild
+    if guild.id in active_bump_tasks and not active_bump_tasks[guild.id].done():
+        try:
+            active_bump_tasks[guild.id].cancel()
+        except Exception:
+            pass
 
-    if remaining > 0:
-        await asyncio.sleep(remaining)
+    async def _runner():
+        state = bot.server_state.setdefault(guild.id, default_server_state())
+        last_bump = state.get("last_bump_time", 0.0)
+        now = time.time()
+        remaining = max(0, int(7200 - (now - last_bump)))
 
-    bump_ch = channel or discord.utils.find(lambda c: "bump" in normalize_text(c.name), guild.text_channels)
-    if bump_ch:
-        role = find_role_resilient(guild, BUMP_ROLE_NAME)
-        ping = role.mention if role else "@here"
-        embed = discord.Embed(
-            title="⏰ Time to Bump!",
-            description="The 2-hour cooldown has passed. Run `/bump` to grow the server! 🚀",
-            color=discord.Color.gold(),
-            timestamp=discord.utils.utcnow()
-        )
-        await bump_ch.send(content=f"🔔 {ping}", embed=embed, allowed_mentions=discord.AllowedMentions(roles=True, everyone=True))
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+
+        bump_ch = channel or discord.utils.find(lambda c: "bump" in normalize_text(c.name), guild.text_channels)
+        if bump_ch:
+            role = find_role_resilient(guild, BUMP_ROLE_NAME)
+            ping = role.mention if role else "@here"
+            embed = discord.Embed(
+                title="⏰ Time to Bump!",
+                description="The 2-hour cooldown has passed. Run `/bump` to grow the server! 🚀",
+                color=discord.Color.gold(),
+                timestamp=discord.utils.utcnow()
+            )
+            await bump_ch.send(content=f"🔔 {ping}", embed=embed, allowed_mentions=discord.AllowedMentions(roles=True, everyone=True))
+
+    task = asyncio.create_task(_runner())
+    active_bump_tasks[guild.id] = task
 
 @bot.event
 async def on_ready():
@@ -946,8 +973,9 @@ async def on_ready():
         bot.server_state[guild.id] = restored
         print(f"✅ State loaded for '{guild.name}' ({len(restored.get('user_xp', {}))} users in database)")
 
+        # Resume bump timer if cooldown was active
         if restored.get("last_bump_time", 0.0) > 0:
-            asyncio.create_task(schedule_bump_reminder(guild))
+            await schedule_bump_reminder(guild)
 
         for member in guild.members:
             if not member.bot:
@@ -1001,6 +1029,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
+        # Intercept automated bump bot success notifications
         if message.author.id == 302050872383242240 or (message.author.bot and "bump" in message.content.lower()):
             success = "bump done" in message.content.lower()
             if not success and message.embeds:
@@ -1013,18 +1042,20 @@ async def on_message(message: discord.Message):
                 state = bot.server_state.setdefault(message.guild.id, default_server_state())
                 state["last_bump_time"] = time.time()
                 await save_state_to_memory(message.guild, data=state)
-                await message.channel.send("🚀 **Bump detected!** Next bump alert in 2 hours.", delete_after=10)
-                asyncio.create_task(schedule_bump_reminder(message.guild, message.channel))
+                await message.channel.send("🚀 **Bump detected!** Next bump alert scheduled in 2 hours.", delete_after=10)
+                await schedule_bump_reminder(message.guild, message.channel)
         return
 
     guild_id = message.guild.id
     state = bot.server_state.setdefault(guild_id, default_server_state())
 
+    # Maintenance Lock Check
     if state.get("maintenance_mode", False) and not is_staff_member(message.author):
         if message.content.startswith("."):
             await message.channel.send("🚧 **Server is currently in Maintenance Mode.** Commands are restricted to staff.", delete_after=6)
         return
 
+    # User Returning from AFK: remove status and post mood-based welcome greeting
     user_str = str(message.author.id)
     if user_str in state["afk_users"]:
         afk_entry = state["afk_users"].pop(user_str, {})
@@ -1042,6 +1073,7 @@ async def on_message(message: discord.Message):
         await message.channel.send(greet, delete_after=10)
         await save_state_to_memory(message.guild, data=state)
 
+    # When someone mentions an AFK user: alert and auto-delete after 10 seconds
     if message.mentions:
         for member in message.mentions:
             m_str = str(member.id)
@@ -1145,7 +1177,7 @@ async def cmd_bump(ctx: commands.Context):
     await save_state_to_memory(ctx.guild, data=state)
 
     await ctx.send(f"👊 {ctx.author.mention}, bump logged! I'll ping **{BUMP_ROLE_NAME}** in 2 hours.", delete_after=10)
-    asyncio.create_task(schedule_bump_reminder(ctx.guild, ctx.channel))
+    await schedule_bump_reminder(ctx.guild, ctx.channel)
 
 @bot.command(name="bumptimer", aliases=["nextbump", "bumpcheck", "bp"])
 async def cmd_bumptimer(ctx: commands.Context):
@@ -1203,23 +1235,23 @@ async def cmd_rank(ctx: commands.Context, member: Optional[discord.Member] = Non
     uid_str = str(target.id)
 
     lvl = state["user_levels"].get(uid_str, 1)
-    tot_xp = state["user_xp"].get(uid_str, 0)
+    current_xp = state["user_xp"].get(uid_str, 0)
     needed_xp = lvl * 300
 
     if lvl >= MAX_LEVEL:
         lvl_display = f"{lvl} (MAX)"
-        progress_text = f"{tot_xp:,} XP (Maximum Level Reached)"
+        progress_text = f"{current_xp:,} XP (Maximum Level Reached)"
         bar = "▰" * 10
     else:
         lvl_display = str(lvl)
-        progress = min(int((tot_xp / max(needed_xp, 1)) * 10), 10)
+        progress = min(int((current_xp / max(needed_xp, 1)) * 10), 10)
         bar = "▰" * progress + "▱" * (10 - progress)
-        progress_text = f"{tot_xp:,} / {needed_xp:,} XP"
+        progress_text = f"{current_xp:,} / {needed_xp:,} XP"
 
     embed = discord.Embed(title=f"📊 Rank Card — {target.display_name}", color=discord.Color.teal())
     embed.set_thumbnail(url=target.display_avatar.url)
     embed.add_field(name="Level", value=f"**{lvl_display}**", inline=True)
-    embed.add_field(name="Progress", value=progress_text, inline=True)
+    embed.add_field(name="Tier Progress", value=progress_text, inline=True)
     embed.add_field(name="Progress Bar", value=f"`[{bar}]`", inline=False)
     await ctx.send(embed=embed)
 
@@ -1336,7 +1368,7 @@ async def cmd_botlist(ctx: commands.Context):
     embed.add_field(
         name="📦 System & Backup",
         value=(
-            "• `.backup` — Commits server state snapshot to `#bot-memory`\n"
+            "• `.backup` — Commits server state snapshot to `#bot-memory` (keeps 3 backups)\n"
             "• `.restorebackup` — Synchronizes state from `#bot-memory`\n"
             "• `.removeadminrole` — Migrates legacy Admin holders to Highness"
         ),
@@ -1737,7 +1769,7 @@ async def cmd_backup(ctx: commands.Context):
     guild_id = ctx.guild.id
     state = bot.server_state.setdefault(guild_id, default_server_state())
     await save_state_to_memory(ctx.guild, data=state)
-    await status.edit(content="✅ **Server state backup committed successfully.**")
+    await status.edit(content="✅ **Server state backup committed successfully (3-backup rolling retention applied).**")
 
 @bot.command(name="restorebackup")
 @commands.has_permissions(administrator=True)
