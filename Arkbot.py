@@ -336,6 +336,7 @@ def default_server_state() -> Dict[str, Any]:
         "user_mute_counts": {},
         "afk_users": {},
         "user_birthdays": {},
+        "announced_birthdays": {},
         "last_anniversary": {},
         "confession_counter": 0,
         "last_bump_time": 0.0,
@@ -366,11 +367,13 @@ def migrate_state_payload(data: dict) -> dict:
 
 async def save_state_to_memory(guild: discord.Guild, memory_channel_name: str = "bot-memory", data: dict = None):
     async with memory_lock:
-        channel = discord.utils.find(lambda c: c.name == memory_channel_name, guild.text_channels)
+        channel = discord.utils.find(lambda c: normalize_text(c.name) == normalize_text(memory_channel_name), guild.text_channels)
         if not channel:
             overwrites = {
-                guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                guild.me: discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, attach_files=True, read_message_history=True
+                )
             }
             try:
                 channel = await guild.create_text_channel(name=memory_channel_name, overwrites=overwrites)
@@ -408,7 +411,7 @@ async def save_state_to_memory(guild: discord.Guild, memory_channel_name: str = 
             pass
 
 async def load_state_from_memory(guild: discord.Guild, memory_channel_name: str = "bot-memory") -> dict:
-    channel = discord.utils.find(lambda c: c.name == memory_channel_name, guild.text_channels)
+    channel = discord.utils.find(lambda c: normalize_text(c.name) == normalize_text(memory_channel_name), guild.text_channels)
     if not channel:
         return default_server_state()
 
@@ -520,9 +523,9 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
 
 xp_cooldowns: Dict[int, float] = {}
 
-async def verify_member_tenure(member: discord.Member):
-    if not member.joined_at or member.bot:
-        return
+async def verify_member_tenure(member: discord.Member, auto_save: bool = True) -> bool:
+    if not member.joined_at or member.bot or not member.guild:
+        return False
     now = datetime.now(timezone.utc)
     if (now - member.joined_at).days >= 365:
         guild = member.guild
@@ -545,13 +548,16 @@ async def verify_member_tenure(member: discord.Member):
                     pass
 
             state["last_anniversary"][str(member.id)] = current_year
-            await save_state_to_memory(guild, data=state)
+            if auto_save:
+                await save_state_to_memory(guild, data=state)
+            return True
+    return False
 
 async def sync_member_level_tier(member: discord.Member, new_level: int):
     guild = member.guild
     target_tier_data = None
     for (min_lvl, max_lvl), config in LEVEL_TIER_ROLES.items():
-        if min_lvl <= new_level <= max_lvl:
+        if min_lvl <= new_level <= max_lvl or (max_lvl == 70 and new_level >= 60):
             target_tier_data = config
             break
 
@@ -602,14 +608,17 @@ async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool =
     curr_xp = state["user_xp"].get(uid_str, 0) + xp_amount
     curr_lvl = state["user_levels"].get(uid_str, 1)
 
-    needed_xp = curr_lvl * 300
-
-    # Handle tier progression up to MAX_LEVEL
-    if curr_lvl < MAX_LEVEL and curr_xp >= needed_xp:
+    leveled_up = False
+    # Handles multi-level advancements cleanly without skipping thresholds
+    while curr_lvl < MAX_LEVEL and curr_xp >= (curr_lvl * 300):
+        curr_xp -= (curr_lvl * 300)
         curr_lvl += 1
-        curr_xp -= needed_xp
-        state["user_levels"][uid_str] = curr_lvl
-        state["user_xp"][uid_str] = curr_xp
+        leveled_up = True
+
+    state["user_xp"][uid_str] = curr_xp
+    state["user_levels"][uid_str] = curr_lvl
+
+    if leveled_up:
         await sync_member_level_tier(member, curr_lvl)
 
         ann_ch = discord.utils.find(lambda c: "level-announcements" in normalize_text(c.name), guild.text_channels)
@@ -621,11 +630,12 @@ async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool =
                 timestamp=discord.utils.utcnow()
             )
             embed.set_thumbnail(url=member.display_avatar.url)
-            await ann_ch.send(content=f"🎉 {member.mention}", embed=embed)
+            try:
+                await ann_ch.send(content=f"🎉 {member.mention}", embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
         await save_state_to_memory(guild, data=state)
-    else:
-        state["user_xp"][uid_str] = curr_xp
 
 # ==============================================================================
 # 6. INTERACTIVE PANELS, MODALS & VIEWS
@@ -756,12 +766,14 @@ class ConfessionModal(discord.ui.Modal, title="Anonymous Confession Portal"):
             timestamp=discord.utils.utcnow()
         )
         embed.set_footer(text="Submit yours via the confession form panel!")
-        msg = await target_ch.send(embed=embed)
-        await msg.add_reaction("❤️")
-        await msg.add_reaction("💔")
-
-        await interaction.followup.send("🤫 Your anonymous confession has been dispatched successfully!", ephemeral=True)
-        await save_state_to_memory(guild, data=state)
+        try:
+            msg = await target_ch.send(embed=embed)
+            await msg.add_reaction("❤️")
+            await msg.add_reaction("💔")
+            await interaction.followup.send("🤫 Your anonymous confession has been dispatched successfully!", ephemeral=True)
+            await save_state_to_memory(guild, data=state)
+        except (discord.Forbidden, discord.HTTPException) as e:
+            await interaction.followup.send(f"❌ Failed to dispatch confession: {e}", ephemeral=True)
 
 class ConfessionPanelView(discord.ui.View):
     def __init__(self):
@@ -774,11 +786,15 @@ class ConfessionPanelView(discord.ui.View):
 class TicketControlsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+        self.closing = False
 
     @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="btn_ticket_close")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        await interaction.followup.send("🔒 **Ticket closing in 5 seconds...**")
+        if self.closing:
+            return await interaction.response.send_message("⚠️ This ticket is already in the process of closing.", ephemeral=True)
+        self.closing = True
+        
+        await interaction.response.send_message("🔒 **Ticket closing in 5 seconds...**")
         
         guild_id = interaction.guild.id
         state = bot.server_state.setdefault(guild_id, default_server_state())
@@ -800,10 +816,17 @@ class TicketLaunchView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         guild, user = interaction.guild, interaction.user
 
+        guild_id = guild.id
+        state = bot.server_state.setdefault(guild_id, default_server_state())
+
+        for ch_id, t_info in list(state.get("tickets", {}).items()):
+            if t_info.get("user_id") == user.id:
+                existing_ch = guild.get_channel(int(ch_id))
+                if existing_ch:
+                    return await interaction.followup.send(f"⚠️ You already have an open ticket in {existing_ch.mention}.", ephemeral=True)
+
         clean_name = re.sub(r"[^\w-]", "", user.name.lower()) or str(user.id)
         ticket_ch_name = f"ticket-{clean_name[:20]}"
-        if discord.utils.find(lambda c: c.name == ticket_ch_name, guild.text_channels):
-            return await interaction.followup.send("⚠️ You already have an open support ticket.", ephemeral=True)
 
         category = discord.utils.find(lambda c: "team" in normalize_text(c.name), guild.categories)
         overwrites = {
@@ -818,9 +841,6 @@ class TicketLaunchView(discord.ui.View):
 
         try:
             ch = await guild.create_text_channel(name=ticket_ch_name, category=category, overwrites=overwrites, reason="Support ticket open")
-            
-            guild_id = guild.id
-            state = bot.server_state.setdefault(guild_id, default_server_state())
             state["tickets"][str(ch.id)] = {"user_id": user.id, "created_at": datetime.now(timezone.utc).isoformat()}
             await save_state_to_memory(guild, data=state)
 
@@ -832,7 +852,7 @@ class TicketLaunchView(discord.ui.View):
             await ch.send(content=f"{user.mention}", embed=embed, view=TicketControlsView())
             await interaction.followup.send(f"✅ Ticket created: {ch.mention}", ephemeral=True)
         except (discord.Forbidden, discord.HTTPException):
-            await interaction.followup.send("❌ Could not create ticket channel.", ephemeral=True)
+            await interaction.followup.send("❌ Could not create ticket channel. Verify permissions.", ephemeral=True)
 
 # ==============================================================================
 # 7. BOT CLIENT SETUP & AUTOMATED LOOPS
@@ -859,36 +879,53 @@ class ChillVerseBot(commands.Bot):
     @tasks.loop(minutes=10)
     async def auto_backup_loop(self):
         for guild in self.guilds:
-            state = self.server_state.get(guild.id)
-            if state:
-                await save_state_to_memory(guild, data=state)
+            try:
+                state = self.server_state.get(guild.id)
+                if state:
+                    await save_state_to_memory(guild, data=state)
+            except Exception as e:
+                print(f"⚠️ Automated backup failed for guild '{guild.name}': {e}")
 
     @auto_backup_loop.before_loop
     async def before_auto_backup(self):
         await self.wait_until_ready()
 
-    @tasks.loop(hours=24)
+    @tasks.loop(hours=1)
     async def daily_birthday_check(self):
         now = datetime.now(timezone.utc)
         today_str = now.strftime("%d-%m")
+        current_year = str(now.year)
+        
         for guild in self.guilds:
-            state = self.server_state.get(guild.id, {})
-            birthdays = state.get("user_birthdays", {})
-            bday_ch = discord.utils.find(lambda c: "birthdays" in normalize_text(c.name), guild.text_channels)
-            if not bday_ch:
-                continue
+            try:
+                state = self.server_state.get(guild.id, {})
+                birthdays = state.get("user_birthdays", {})
+                announced = state.setdefault("announced_birthdays", {})
+                bday_ch = discord.utils.find(lambda c: "birthdays" in normalize_text(c.name), guild.text_channels)
+                if not bday_ch:
+                    continue
 
-            for uid, bday in birthdays.items():
-                if bday == today_str:
-                    member = guild.get_member(int(uid))
-                    if member:
-                        embed = discord.Embed(
-                            title="🎂 Happy Birthday! 🎉",
-                            description=f"Wishing a wonderful Birthday to {member.mention}! 🥳✨\nHave an amazing day celebrating in Chill-Verse!",
-                            color=discord.Color.gold()
-                        )
-                        embed.set_thumbnail(url=member.display_avatar.url)
-                        await bday_ch.send(content=f"🎉 {member.mention}", embed=embed)
+                updated = False
+                for uid, bday in birthdays.items():
+                    if bday == today_str and announced.get(str(uid)) != current_year:
+                        member = guild.get_member(int(uid))
+                        if member:
+                            embed = discord.Embed(
+                                title="🎂 Happy Birthday! 🎉",
+                                description=f"Wishing a wonderful Birthday to {member.mention}! 🥳✨\nHave an amazing day celebrating in Chill-Verse!",
+                                color=discord.Color.gold()
+                            )
+                            embed.set_thumbnail(url=member.display_avatar.url)
+                            try:
+                                await bday_ch.send(content=f"🎉 {member.mention}", embed=embed)
+                                announced[str(uid)] = current_year
+                                updated = True
+                            except (discord.Forbidden, discord.HTTPException):
+                                pass
+                if updated:
+                    await save_state_to_memory(guild, data=state)
+            except Exception as e:
+                print(f"⚠️ Birthday verification error for guild '{guild.name}': {e}")
 
     @daily_birthday_check.before_loop
     async def before_bday_check(self):
@@ -923,7 +960,16 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
         return
     if isinstance(error, commands.CommandNotFound):
         return
-    print(f"❌ Command Error [{ctx.command}]: {error}")
+    if isinstance(error, commands.MissingRequiredArgument):
+        return await ctx.send(f"⚠️ Missing required parameter: `{error.param.name}`", delete_after=8)
+    if isinstance(error, commands.BadArgument):
+        return await ctx.send(f"⚠️ Invalid argument provided: {error}", delete_after=8)
+    if isinstance(error, commands.MissingPermissions):
+        return await ctx.send("❌ You lack the necessary permissions to execute this command.", delete_after=8)
+    if isinstance(error, commands.BotMissingPermissions):
+        return await ctx.send(f"❌ The bot lacks required permissions: `{', '.join(error.missing_permissions)}`", delete_after=8)
+    
+    print(f"❌ Unhandled Command Error [{ctx.command}]: {error}")
     try:
         await ctx.send(f"⚠️ Error executing command: `{error}`", delete_after=10)
     except Exception:
@@ -934,7 +980,6 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
 # ==============================================================================
 
 async def schedule_bump_reminder(guild: discord.Guild, channel: Optional[discord.TextChannel] = None):
-    # Idempotent task runner: cancel any previous duplicate bump task for this guild
     if guild.id in active_bump_tasks and not active_bump_tasks[guild.id].done():
         try:
             active_bump_tasks[guild.id].cancel()
@@ -960,7 +1005,10 @@ async def schedule_bump_reminder(guild: discord.Guild, channel: Optional[discord
                 color=discord.Color.gold(),
                 timestamp=discord.utils.utcnow()
             )
-            await bump_ch.send(content=f"🔔 {ping}", embed=embed, allowed_mentions=discord.AllowedMentions(roles=True, everyone=True))
+            try:
+                await bump_ch.send(content=f"🔔 {ping}", embed=embed, allowed_mentions=discord.AllowedMentions(roles=True, everyone=True))
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
     task = asyncio.create_task(_runner())
     active_bump_tasks[guild.id] = task
@@ -973,13 +1021,16 @@ async def on_ready():
         bot.server_state[guild.id] = restored
         print(f"✅ State loaded for '{guild.name}' ({len(restored.get('user_xp', {}))} users in database)")
 
-        # Resume bump timer if cooldown was active
         if restored.get("last_bump_time", 0.0) > 0:
             await schedule_bump_reminder(guild)
 
+        modified = False
         for member in guild.members:
             if not member.bot:
-                await verify_member_tenure(member)
+                if await verify_member_tenure(member, auto_save=False):
+                    modified = True
+        if modified:
+            await save_state_to_memory(guild, data=bot.server_state[guild.id])
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -1002,7 +1053,10 @@ async def on_member_join(member: discord.Member):
         )
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text=f"Member #{len(member.guild.members)}")
-        await welcome_ch.send(content=f"Welcome {member.mention}!", embed=embed)
+        try:
+            await welcome_ch.send(content=f"Welcome {member.mention}!", embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
@@ -1024,7 +1078,10 @@ async def on_member_update(before: discord.Member, after: discord.Member):
                 timestamp=discord.utils.utcnow()
             )
             embed.set_thumbnail(url=after.display_avatar.url)
-            await ann_ch.send(content=f"🎉 {after.mention}", embed=embed)
+            try:
+                await ann_ch.send(content=f"🎉 {after.mention}", embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -1035,7 +1092,7 @@ async def on_message(message: discord.Message):
             if not success and message.embeds:
                 for emb in message.embeds:
                     desc = emb.description or ""
-                    if "bump done" in desc.lower() or "thumbsup" in desc.lower():
+                    if "bump done" in desc.lower() or "thumbsup" in desc.lower() or "👍" in desc:
                         success = True
                         break
             if success and message.guild:
@@ -1055,9 +1112,9 @@ async def on_message(message: discord.Message):
             await message.channel.send("🚧 **Server is currently in Maintenance Mode.** Commands are restricted to staff.", delete_after=6)
         return
 
-    # User Returning from AFK: remove status and post mood-based welcome greeting
     user_str = str(message.author.id)
-    if user_str in state["afk_users"]:
+    # Check AFK return: do not trigger if user is executing .afk command
+    if user_str in state["afk_users"] and not message.content.strip().startswith(f"{bot.command_prefix}afk"):
         afk_entry = state["afk_users"].pop(user_str, {})
         spent_time = int((time.time() - afk_entry.get("timestamp", time.time())) // 60)
         spent_str = f"{spent_time} minute(s)" if spent_time > 0 else "a few seconds"
@@ -1073,735 +1130,8 @@ async def on_message(message: discord.Message):
         await message.channel.send(greet, delete_after=10)
         await save_state_to_memory(message.guild, data=state)
 
-    # When someone mentions an AFK user: alert and auto-delete after 10 seconds
+    # When someone mentions an AFK user
     if message.mentions:
-        for member in message.mentions:
+        for member in set(message.mentions):
             m_str = str(member.id)
-            if m_str in state["afk_users"] and member.id != message.author.id:
-                rec = state["afk_users"][m_str]
-                mins = int((time.time() - rec["timestamp"]) // 60)
-                t_str = f"{mins}m ago" if mins > 0 else "just now"
-                m_mood = rec.get("mood", "neutral")
-
-                if m_mood == "sad":
-                    note = f"🥺 **{member.display_name}** is AFK feeling down: *{rec['reason']}* `({t_str})` 💔"
-                elif m_mood == "happy":
-                    note = f"✨ **{member.display_name}** is AFK vibing: *{rec['reason']}* `({t_str})` 😊"
-                else:
-                    note = f"💤 **{member.display_name}** is AFK: *{rec['reason']}* `({t_str})`"
-
-                await message.channel.send(note, delete_after=10)
-
-    ch_name = normalize_text(message.channel.name)
-    if "vouch" in ch_name:
-        try:
-            await message.add_reaction("⭐")
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-    elif "memes" in ch_name or "selfies" in ch_name or "photography" in ch_name:
-        if message.attachments or "http" in message.content:
-            try:
-                await message.add_reaction("❤️")
-                await message.add_reaction("🔥")
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-    elif "discussions" in ch_name and not isinstance(message.channel, discord.Thread):
-        if message.type == discord.MessageType.default:
-            try:
-                thread_title = message.content[:40] if message.content else f"Discussion by {message.author.name}"
-                await message.create_thread(name=f"💬・{thread_title}")
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-
-    await add_xp(message.author, 15)
-    await bot.process_commands(message)
-
-# ==============================================================================
-# 9. USER, LEVEL & COMMUNITY COMMANDS
-# ==============================================================================
-
-@bot.command(name="afk")
-async def cmd_afk(ctx: commands.Context, *, reason: str = "AFK"):
-    try:
-        await ctx.message.delete(delay=10)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-
-    mood = "neutral"
-    lower_r = reason.lower()
-    sad_words = ["sad", "depressed", "cry", "crying", "unhappy", "down", "hurt", "tired", "heartbroken", "gloomy", "lonely"]
-    happy_words = ["happy", "glad", "joy", "excited", "vibing", "celebrate", "chilling", "good", "fun", "blessed"]
-
-    if any(w in lower_r for w in sad_words):
-        mood = "sad"
-        status_header = "🥺 Gone AFK (Feeling Down)"
-        color = discord.Color.from_rgb(130, 140, 200)
-        subtext = "Hope you feel better soon! Take care of yourself 🤍"
-    elif any(w in lower_r for w in happy_words):
-        mood = "happy"
-        status_header = "✨ Gone AFK (Feeling Great!)"
-        color = discord.Color.gold()
-        subtext = "Enjoy your time and keep smiling! ✨"
-    else:
-        status_header = "💤 Gone AFK"
-        color = discord.Color.teal()
-        subtext = "I'll let everyone know you're away."
-
-    state["afk_users"][str(ctx.author.id)] = {
-        "reason": reason,
-        "timestamp": time.time(),
-        "mood": mood
-    }
-    await save_state_to_memory(ctx.guild, data=state)
-
-    embed = discord.Embed(
-        title=status_header,
-        description=f"{ctx.author.mention} is now AFK: **{reason}**\n*{subtext}*",
-        color=color
-    )
-    embed.set_footer(text="Notice clears in 10s. AFK remains saved until you speak again!")
-    await ctx.send(embed=embed, delete_after=10)
-
-@bot.command(name="bump")
-async def cmd_bump(ctx: commands.Context):
-    try:
-        await ctx.message.delete(delay=10)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-    state["last_bump_time"] = time.time()
-    await add_xp(ctx.author, 250, bypass_cooldown=True)
-    await save_state_to_memory(ctx.guild, data=state)
-
-    await ctx.send(f"👊 {ctx.author.mention}, bump logged! I'll ping **{BUMP_ROLE_NAME}** in 2 hours.", delete_after=10)
-    await schedule_bump_reminder(ctx.guild, ctx.channel)
-
-@bot.command(name="bumptimer", aliases=["nextbump", "bumpcheck", "bp"])
-async def cmd_bumptimer(ctx: commands.Context):
-    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-    last_bump = state.get("last_bump_time", 0.0)
-    elapsed = time.time() - last_bump
-    remaining = int(7200 - elapsed)
-
-    if remaining > 0:
-        mins, secs = divmod(remaining, 60)
-        hours, mins = divmod(mins, 60)
-        time_str = f"{hours}h {mins}m {secs}s" if hours > 0 else f"{mins}m {secs}s"
-        progress = min(int((elapsed / 7200) * 10), 10)
-        bar = "▰" * progress + "▱" * (10 - progress)
-
-        embed = discord.Embed(
-            title="⏰ Server Bump Countdown",
-            description=f"Next bump will be ready in **{time_str}**!\n\n`[{bar}]`",
-            color=discord.Color.gold()
-        )
-        embed.set_footer(text=f"Requested by {ctx.author.display_name}")
-        await ctx.send(embed=embed)
-    else:
-        embed = discord.Embed(
-            title="🚀 Bump Ready!",
-            description="The server is ready to be bumped right now! Run `/bump` to grow the server.",
-            color=discord.Color.green()
-        )
-        await ctx.send(embed=embed)
-
-@bot.command(name="setbirthday", aliases=["setbday"])
-async def cmd_setbirthday(ctx: commands.Context, date_str: str):
-    if not re.match(r"^(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[0-2])$", date_str):
-        return await ctx.send("⚠️ Invalid format! Use `DD-MM` (e.g. `.setbirthday 15-06`).", delete_after=10)
-
-    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-    state["user_birthdays"][str(ctx.author.id)] = date_str
-    await save_state_to_memory(ctx.guild, data=state)
-    await ctx.send(f"🎂 {ctx.author.mention}, your birthday was saved as **{date_str}**!", delete_after=10)
-
-@bot.command(name="birthday", aliases=["bday"])
-async def cmd_birthday(ctx: commands.Context, member: Optional[discord.Member] = None):
-    target = member or ctx.author
-    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-    bday = state["user_birthdays"].get(str(target.id))
-    if bday:
-        await ctx.send(f"🎂 **{target.display_name}**'s birthday is **{bday}** (DD-MM).")
-    else:
-        await ctx.send(f"ℹ️ No birthday saved for **{target.display_name}**.")
-
-@bot.command(name="rank", aliases=["level", "xp"])
-async def cmd_rank(ctx: commands.Context, member: Optional[discord.Member] = None):
-    target = member or ctx.author
-    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-    uid_str = str(target.id)
-
-    lvl = state["user_levels"].get(uid_str, 1)
-    current_xp = state["user_xp"].get(uid_str, 0)
-    needed_xp = lvl * 300
-
-    if lvl >= MAX_LEVEL:
-        lvl_display = f"{lvl} (MAX)"
-        progress_text = f"{current_xp:,} XP (Maximum Level Reached)"
-        bar = "▰" * 10
-    else:
-        lvl_display = str(lvl)
-        progress = min(int((current_xp / max(needed_xp, 1)) * 10), 10)
-        bar = "▰" * progress + "▱" * (10 - progress)
-        progress_text = f"{current_xp:,} / {needed_xp:,} XP"
-
-    embed = discord.Embed(title=f"📊 Rank Card — {target.display_name}", color=discord.Color.teal())
-    embed.set_thumbnail(url=target.display_avatar.url)
-    embed.add_field(name="Level", value=f"**{lvl_display}**", inline=True)
-    embed.add_field(name="Tier Progress", value=progress_text, inline=True)
-    embed.add_field(name="Progress Bar", value=f"`[{bar}]`", inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command(name="leaderboard", aliases=["lb", "top"])
-async def cmd_leaderboard(ctx: commands.Context):
-    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-    users_xp = state["user_xp"]
-    if not users_xp:
-        return await ctx.send("ℹ️ No XP records found in the database yet.")
-
-    sorted_users = sorted(users_xp.items(), key=lambda item: item[1], reverse=True)[:10]
-    lines = []
-    for rank, (uid, xp_val) in enumerate(sorted_users, 1):
-        member = ctx.guild.get_member(int(uid))
-        name = member.display_name if member else f"User {uid}"
-        lvl = state["user_levels"].get(uid, 1)
-        lvl_str = f"**{lvl} (MAX)**" if lvl >= MAX_LEVEL else f"**{lvl}**"
-        lines.append(f"**#{rank}** {name} — Level {lvl_str} ({xp_val:,} XP)")
-
-    embed = discord.Embed(
-        title="🏆 Server XP Leaderboard",
-        description="\n".join(lines),
-        color=discord.Color.gold(),
-        timestamp=discord.utils.utcnow()
-    )
-    await ctx.send(embed=embed)
-
-@bot.command(name="poll")
-@is_staff_or_admin()
-async def cmd_poll(ctx: commands.Context, *, question: str):
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-    poll_ch = discord.utils.find(lambda c: "daily-polls" in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
-    role = find_role_resilient(ctx.guild, POLL_ROLE_NAME)
-    ping = role.mention if role else "@here"
-
-    embed = discord.Embed(
-        title="📊 Official Server Poll",
-        description=f"**{question}**\n\nReact below to vote!",
-        color=discord.Color.gold(),
-        timestamp=discord.utils.utcnow()
-    )
-    embed.set_footer(text=f"Poll by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
-    msg = await poll_ch.send(content=f"🔔 {ping}", embed=embed, allowed_mentions=discord.AllowedMentions(roles=True, everyone=True))
-    await msg.add_reaction("👍")
-    await msg.add_reaction("👎")
-
-@bot.command(name="botlist", aliases=["botcommands"])
-@is_team_channel()
-async def cmd_botlist(ctx: commands.Context):
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-    embed = discord.Embed(
-        title="🤖 Chill-Verse Complete Command Matrix",
-        description="Comprehensive catalog of all administrative, staff, and public user commands:",
-        color=discord.Color.teal(),
-        timestamp=discord.utils.utcnow()
-    )
-    embed.add_field(
-        name="🏗️ Setup & Infrastructure",
-        value=(
-            "• `.setup_channels` — Deploys missing channels & auto-posts panels safely\n"
-            "• `.syncperms` — Enforces staff and tier permission matrices\n"
-            "• `.autorole_setup` — Provisions all server roles and cosmetic tiers\n"
-            "• `.resetroles` — Wipes and re-provisions all managed server roles\n"
-            "• `.maintenance [on/off]` — Toggles server maintenance lock"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="🎨 Panels & UI Management",
-        value=(
-            "• `.communitypanel` — Spawns PollPings and Roblox role picker\n"
-            "• `.postcolors` — Spawns the chat color selection dropdown\n"
-            "• `.postgender` — Spawns the identity role dropdown\n"
-            "• `.posttickets` — Spawns the support ticket launcher\n"
-            "• `.postconfession` — Spawns the anonymous confession form panel"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="🛡️ Moderation Suite",
-        value=(
-            "• `.kick <member>` — Kicks a user from the server\n"
-            "• `.ban <member>` — Bans a user from the server\n"
-            "• `.timeout <member> <mins>` — Mutes user & updates mute count\n"
-            "• `.warn <member> [reason]` — Issues official staff warning\n"
-            "• `.warnings <member>` — Views warning and mute record\n"
-            "• `.clearwarns <member>` — Clears warnings for a member\n"
-            "• `.purge <amount>` — Clears up to 100 messages"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="🎮 Public & Community Features",
-        value=(
-            "• `.rank` — Displays user level (capped at 70), total XP, and card\n"
-            "• `.leaderboard` — Shows top 10 most active members by XP\n"
-            "• `.afk [reason]` — Sets happy/sad/custom AFK status with 10s auto-delete\n"
-            "• `.bumptimer` — Checks exact countdown until next bump\n"
-            "• `.bump` — Logs manual server bump and 2-hour reminder timer\n"
-            "• `.setbirthday <DD-MM>` — Registers birthday for daily announcements\n"
-            "• `.birthday [member]` — Checks registered birthday\n"
-            "• `.poll <question>` — Dispatches an official server poll"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="📦 System & Backup",
-        value=(
-            "• `.backup` — Commits server state snapshot to `#bot-memory` (keeps 3 backups)\n"
-            "• `.restorebackup` — Synchronizes state from `#bot-memory`\n"
-            "• `.removeadminrole` — Migrates legacy Admin holders to Highness"
-        ),
-        inline=False
-    )
-    embed.set_footer(text="Restricted exclusively to Team <3 channels.")
-    await ctx.send(embed=embed)
-
-# ==============================================================================
-# 10. MODERATION & MAINTENANCE COMMANDS
-# ==============================================================================
-
-@bot.command(name="maintenance")
-@commands.has_permissions(administrator=True)
-async def cmd_maintenance(ctx: commands.Context, state_arg: Optional[str] = None):
-    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-    
-    if state_arg is None:
-        state["maintenance_mode"] = not state.get("maintenance_mode", False)
-    else:
-        state["maintenance_mode"] = state_arg.lower() in ["on", "enable", "true", "yes"]
-
-    status = state["maintenance_mode"]
-    await save_state_to_memory(ctx.guild, data=state)
-
-    embed = discord.Embed(
-        title="🚧 Maintenance Mode Updated",
-        description=f"Server Maintenance Mode is now **{'ACTIVATED 🔴' if status else 'DEACTIVATED 🟢'}**.\n\n"
-                    f"{'⚠️ Regular commands and non-staff message executions are restricted.' if status else '✅ All public functions and member commands are operational.'}",
-        color=discord.Color.red() if status else discord.Color.green(),
-        timestamp=discord.utils.utcnow()
-    )
-    await ctx.send(embed=embed)
-
-@bot.command(name="warn")
-@is_staff_or_admin()
-async def cmd_warn(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided"):
-    if ctx.author.top_role <= member.top_role or member.id == ctx.guild.owner_id:
-        return await ctx.send("❌ You cannot warn a member with equal or higher authority.")
-
-    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-    uid_str = str(member.id)
-    state["user_warnings"][uid_str] = state["user_warnings"].get(uid_str, 0) + 1
-    total = state["user_warnings"][uid_str]
-    await save_state_to_memory(ctx.guild, data=state)
-
-    embed = discord.Embed(
-        title="⚠️ Member Warned",
-        description=f"**User:** {member.mention} ({member.id})\n**Staff:** {ctx.author.mention}\n**Reason:** {reason}\n**Total Warnings:** `{total}`",
-        color=discord.Color.gold(),
-        timestamp=discord.utils.utcnow()
-    )
-    await ctx.send(embed=embed)
-
-@bot.command(name="warnings", aliases=["warns"])
-@is_staff_or_admin()
-async def cmd_warnings(ctx: commands.Context, member: discord.Member):
-    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-    uid_str = str(member.id)
-    warns = state["user_warnings"].get(uid_str, 0)
-    mutes = state["user_mute_counts"].get(uid_str, 0)
-
-    embed = discord.Embed(
-        title=f"📋 Infraction History — {member.display_name}",
-        description=f"• **Warnings:** `{warns}`\n• **Mutes / Timeouts:** `{mutes}`",
-        color=discord.Color.teal()
-    )
-    await ctx.send(embed=embed)
-
-@bot.command(name="clearwarns", aliases=["clearwarnings"])
-@is_staff_or_admin()
-async def cmd_clearwarns(ctx: commands.Context, member: discord.Member):
-    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-    state["user_warnings"][str(member.id)] = 0
-    await save_state_to_memory(ctx.guild, data=state)
-    await ctx.send(f"✅ Cleared all warnings for **{member.display_name}**.")
-
-@bot.command(name="kick")
-@commands.has_permissions(kick_members=True)
-async def cmd_kick(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided"):
-    if ctx.author.top_role <= member.top_role or member.id == ctx.guild.owner_id:
-        return await ctx.send("❌ You cannot kick a member with equal or higher authority.")
-    if ctx.guild.me.top_role <= member.top_role:
-        return await ctx.send("❌ Cannot kick. Bot role is below member's highest role.")
-    try:
-        await member.kick(reason=f"{reason} (By {ctx.author})")
-        await ctx.send(f"👢 Kicked **{member.display_name}** | Reason: {reason}")
-    except discord.Forbidden:
-        await ctx.send("❌ Failed to kick. Check bot permissions and role order.")
-
-@bot.command(name="ban")
-@commands.has_permissions(ban_members=True)
-async def cmd_ban(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided"):
-    if ctx.author.top_role <= member.top_role or member.id == ctx.guild.owner_id:
-        return await ctx.send("❌ You cannot ban a member with equal or higher authority.")
-    if ctx.guild.me.top_role <= member.top_role:
-        return await ctx.send("❌ Cannot ban. Bot role is below member's highest role.")
-    try:
-        await member.ban(reason=f"{reason} (By {ctx.author})")
-        await ctx.send(f"🔨 Banned **{member.display_name}** | Reason: {reason}")
-    except discord.Forbidden:
-        await ctx.send("❌ Failed to ban. Check bot permissions and role order.")
-
-@bot.command(name="timeout", aliases=["mute"])
-@commands.has_permissions(moderate_members=True)
-async def cmd_timeout(ctx: commands.Context, member: discord.Member, minutes: int, *, reason: str = "No reason provided"):
-    if ctx.author.top_role <= member.top_role or member.id == ctx.guild.owner_id:
-        return await ctx.send("❌ You cannot moderate a member with equal or higher authority.")
-    if ctx.guild.me.top_role <= member.top_role:
-        return await ctx.send("❌ Cannot timeout. Bot role is below member's highest role.")
-    try:
-        until = discord.utils.utcnow() + timedelta(minutes=minutes)
-        await member.timeout(until, reason=f"{reason} (By {ctx.author})")
-
-        state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-        uid_str = str(member.id)
-        state["user_mute_counts"][uid_str] = state["user_mute_counts"].get(uid_str, 0) + 1
-        await save_state_to_memory(ctx.guild, data=state)
-
-        await ctx.send(f"⏳ Timed out **{member.display_name}** for {minutes} min(s) | Total Mutes: `{state['user_mute_counts'][uid_str]}`")
-    except discord.Forbidden:
-        await ctx.send("❌ Failed to timeout. Check bot permissions and role order.")
-
-@bot.command(name="purge", aliases=["clear"])
-@commands.has_permissions(manage_messages=True)
-async def cmd_purge(ctx: commands.Context, amount: int):
-    if amount < 1 or amount > 100:
-        return await ctx.send("⚠️ Specify an amount between 1 and 100 messages.", delete_after=5)
-    await ctx.message.delete()
-    deleted = await ctx.channel.purge(limit=amount)
-    await ctx.send(f"🧹 Purged **{len(deleted)}** message(s).", delete_after=5)
-
-# ==============================================================================
-# 11. DEPLOYMENT, SAFE CHANNELS & ROLE MANAGEMENT
-# ==============================================================================
-
-@bot.command(name="syncperms")
-@commands.has_permissions(administrator=True)
-async def cmd_syncperms(ctx: commands.Context):
-    status = await ctx.send("⏳ **Enforcing server permission hierarchy...**")
-    guild = ctx.guild
-    updated, failed = [], []
-
-    for rname, cfg in ROLE_PERMISSIONS_CONFIG.items():
-        role = find_role_resilient(guild, rname) or await ensure_role_exists(guild, rname, cfg["color"], cfg["permissions"], cfg["hoist"])
-        if guild.me.top_role > role:
-            if role.permissions != cfg["permissions"] or role.hoist != cfg["hoist"]:
-                try:
-                    await role.edit(permissions=cfg["permissions"], hoist=cfg["hoist"], reason="Staff matrix sync")
-                    updated.append(f"🛡️ Updated staff `{role.name}`")
-                    await asyncio.sleep(0.35)
-                except Exception as e:
-                    failed.append(f"❌ `{role.name}`: {e}")
-        else:
-            failed.append(f"⚠️ `{role.name}` is positioned above the bot")
-
-    for (low, high), cfg in LEVEL_TIER_ROLES.items():
-        role = find_role_resilient(guild, cfg["name"]) or await ensure_role_exists(guild, cfg["name"], cfg["color"], cfg["permissions"], cfg["hoist"])
-        if guild.me.top_role > role:
-            if role.permissions != cfg["permissions"] or role.hoist != cfg["hoist"]:
-                try:
-                    await role.edit(permissions=cfg["permissions"], hoist=cfg["hoist"], reason="Tier matrix sync")
-                    updated.append(f"⚡ Level {low}-{high} updated `{role.name}`")
-                    await asyncio.sleep(0.35)
-                except Exception as e:
-                    failed.append(f"❌ `{role.name}`: {e}")
-        else:
-            failed.append(f"⚠️ `{role.name}` is positioned above the bot")
-
-    embed = discord.Embed(
-        title="🛡️ Permission Audit Results",
-        description="\n".join(updated) if updated else "All role permissions are fully up to date.",
-        color=discord.Color.green() if not failed else discord.Color.gold(),
-        timestamp=discord.utils.utcnow()
-    )
-    if failed:
-        embed.add_field(name="Hierarchy Conflicts", value="\n".join(failed), inline=False)
-    await status.edit(content=None, embed=embed)
-
-@bot.command(name="autorole_setup")
-@commands.has_permissions(administrator=True)
-async def cmd_autorole_setup(ctx: commands.Context):
-    guild = ctx.guild
-    msg = await ctx.send("⏳ **Auditing and provisioning all server roles...**")
-
-    for rname, cfg in ROLE_PERMISSIONS_CONFIG.items():
-        await ensure_role_exists(guild, rname, cfg["color"], cfg["permissions"], cfg["hoist"])
-
-    for (low, high), cfg in LEVEL_TIER_ROLES.items():
-        await ensure_role_exists(guild, cfg["name"], cfg["color"], cfg["permissions"], cfg["hoist"])
-
-    for c_name, c_color in PRO_HEX_COLORS.items():
-        await ensure_role_exists(guild, c_name, c_color)
-    for g_name, g_color in GENDER_ROLES.items():
-        await ensure_role_exists(guild, g_name, g_color)
-
-    await ensure_role_exists(guild, OG_ROLE_NAME, discord.Color.dark_magenta())
-    await ensure_role_exists(guild, VETERAN_ROLE_NAME, discord.Color.purple())
-    await ensure_role_exists(guild, BOOSTER_ROLE_NAME, discord.Color.from_rgb(255, 105, 180))
-    await ensure_role_exists(guild, VANITY_ROLE_NAME, discord.Color.from_rgb(120, 100, 180))
-    await ensure_role_exists(guild, BUMP_ROLE_NAME, discord.Color.gold(), mentionable=True)
-    await ensure_role_exists(guild, POLL_ROLE_NAME, discord.Color.red(), mentionable=True)
-    await ensure_role_exists(guild, ROBLOX_ROLE_NAME, discord.Color.blue())
-
-    await msg.edit(content="✅ **All server roles, staff permissions, and cosmetics successfully initialized!**")
-
-@bot.command(name="resetroles")
-@commands.has_permissions(administrator=True)
-async def cmd_resetroles(ctx: commands.Context):
-    guild = ctx.guild
-    msg = await ctx.send("⏳ **Wiping all bot-managed roles and re-adding them...**")
-
-    managed_names = set()
-    for rname in ROLE_PERMISSIONS_CONFIG:
-        managed_names.add(normalize_text(rname))
-    for cfg in LEVEL_TIER_ROLES.values():
-        managed_names.add(normalize_text(cfg["name"]))
-    for c_name in PRO_HEX_COLORS:
-        managed_names.add(normalize_text(c_name))
-    for g_name in GENDER_ROLES:
-        managed_names.add(normalize_text(g_name))
-    for m_name in [OG_ROLE_NAME, VETERAN_ROLE_NAME, BOOSTER_ROLE_NAME, VANITY_ROLE_NAME, BUMP_ROLE_NAME, POLL_ROLE_NAME, ROBLOX_ROLE_NAME, "୨୧Newbie୨୧"]:
-        managed_names.add(normalize_text(m_name))
-
-    deleted_count = 0
-    for role in guild.roles:
-        if normalize_text(role.name) in managed_names and guild.me.top_role > role and role != guild.default_role:
-            try:
-                await role.delete(reason="Role reset command executed")
-                deleted_count += 1
-                await asyncio.sleep(0.3)
-            except Exception:
-                pass
-
-    for rname, cfg in ROLE_PERMISSIONS_CONFIG.items():
-        await ensure_role_exists(guild, rname, cfg["color"], cfg["permissions"], cfg["hoist"])
-    for (low, high), cfg in LEVEL_TIER_ROLES.items():
-        await ensure_role_exists(guild, cfg["name"], cfg["color"], cfg["permissions"], cfg["hoist"])
-    for c_name, c_color in PRO_HEX_COLORS.items():
-        await ensure_role_exists(guild, c_name, c_color)
-    for g_name, g_color in GENDER_ROLES.items():
-        await ensure_role_exists(guild, g_name, g_color)
-
-    await ensure_role_exists(guild, OG_ROLE_NAME, discord.Color.dark_magenta())
-    await ensure_role_exists(guild, VETERAN_ROLE_NAME, discord.Color.purple())
-    await ensure_role_exists(guild, BOOSTER_ROLE_NAME, discord.Color.from_rgb(255, 105, 180))
-    await ensure_role_exists(guild, VANITY_ROLE_NAME, discord.Color.from_rgb(120, 100, 180))
-    await ensure_role_exists(guild, BUMP_ROLE_NAME, discord.Color.gold(), mentionable=True)
-    await ensure_role_exists(guild, POLL_ROLE_NAME, discord.Color.red(), mentionable=True)
-    await ensure_role_exists(guild, ROBLOX_ROLE_NAME, discord.Color.blue())
-
-    await msg.edit(content=f"✅ **Reset complete! Deleted `{deleted_count}` old roles and re-added all server roles fresh.**")
-
-@bot.command(name="setup_channels")
-@commands.has_permissions(administrator=True)
-async def cmd_setup_channels(ctx: commands.Context):
-    guild = ctx.guild
-    status = await ctx.send("⏳ **Checking blueprint and adding missing channels safely (existing channels are untouched)...**")
-
-    created = 0
-    for cat_data in EXTENDED_SERVER_BLUEPRINT:
-        cat_name = cat_data["category"]
-        category = discord.utils.find(lambda c: normalize_text(c.name) == normalize_text(cat_name), guild.categories)
-        if not category:
-            category = await guild.create_category(name=cat_name, reason="Blueprint Category Init")
-            await asyncio.sleep(0.35)
-
-        for ch in cat_data["channels"]:
-            ch_name, ch_type, scheme = ch["name"], ch["type"], ch["scheme"]
-            user_lim = ch.get("user_limit", 0)
-            overwrites = generate_channel_overwrites(guild, scheme)
-
-            target_list = guild.text_channels if ch_type == "text" else guild.voice_channels
-            channel = discord.utils.find(lambda c: normalize_text(c.name) == normalize_text(ch_name) and c.category_id == category.id, target_list)
-
-            if not channel:
-                if ch_type == "text":
-                    channel = await guild.create_text_channel(name=ch_name, category=category, overwrites=overwrites, reason="Adding missing blueprint channel")
-                else:
-                    channel = await guild.create_voice_channel(name=ch_name, category=category, user_limit=user_lim, overwrites=overwrites, reason="Adding missing blueprint channel")
-                created += 1
-                await asyncio.sleep(0.35)
-
-    embed = discord.Embed(
-        title="✨ Channel Setup Complete",
-        description=f"• **New Missing Channels Added:** `{created}`\n• **Existing Working Channels:** Left completely untouched ✅",
-        color=discord.Color.green(),
-        timestamp=discord.utils.utcnow()
-    )
-    await status.edit(content=None, embed=embed)
-
-@bot.command(name="removeadminrole")
-@commands.has_permissions(administrator=True)
-async def cmd_removeadminrole(ctx: commands.Context):
-    old_role = discord.utils.find(lambda r: normalize_text(r.name) == "admin", ctx.guild.roles)
-    highness = find_role_resilient(ctx.guild, ADMIN_ROLE_NAME)
-    if not old_role:
-        return await ctx.send("ℹ️ No plain `Admin` role exists.")
-
-    if ctx.guild.me.top_role <= old_role:
-        return await ctx.send("❌ Cannot modify `Admin`. Bot role must be higher.")
-
-    status = await ctx.send("⏳ **Migrating legacy Admin role...**")
-    migrated = 0
-    if highness and ctx.guild.me.top_role > highness:
-        for m in old_role.members:
-            if highness not in m.roles:
-                try:
-                    await m.add_roles(highness, reason="Admin migration to Highness")
-                    migrated += 1
-                    await asyncio.sleep(0.35)
-                except Exception:
-                    pass
-
-    try:
-        await old_role.delete(reason="Legacy Admin purged")
-        await status.edit(content=f"✅ Deleted **Admin** and transferred {migrated} member(s) to **{ADMIN_ROLE_NAME}**.")
-    except Exception as e:
-        await status.edit(content=f"❌ Failed to delete role: {e}")
-
-@bot.command(name="communitypanel")
-@commands.has_permissions(administrator=True)
-async def cmd_communitypanel(ctx: commands.Context):
-    embed = discord.Embed(
-        title="✨ Self-Assignable Roles",
-        description="Click below to toggle optional notification and community roles:\n\n📊 **Poll Pings** — Server poll alerts\n🎮 **Roblox Members** — Access to Roblox community chat\n\n*Click again to toggle off.*",
-        color=discord.Color.blue()
-    )
-    await ctx.send(embed=embed, view=CommunityRolesView())
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-@bot.command(name="postcolors")
-@commands.has_permissions(administrator=True)
-async def cmd_postcolors(ctx: commands.Context):
-    ch = discord.utils.find(lambda c: "colours" in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
-    embed = discord.Embed(
-        title="🎨 Customize Your Name Color",
-        description="Select a color from the dropdown below to tint your username in chat.\n\n*Selecting 'Reset Color' removes your custom cosmetic role.*",
-        color=discord.Color.from_rgb(255, 105, 180)
-    )
-    await ch.send(embed=embed, view=ColorView())
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-@bot.command(name="postgender")
-@commands.has_permissions(administrator=True)
-async def cmd_postgender(ctx: commands.Context):
-    embed = discord.Embed(
-        title="✨ Identity Roles",
-        description="Select your gender identity from the dropdown below to update your profile role.",
-        color=discord.Color.purple()
-    )
-    await ctx.send(embed=embed, view=GenderView())
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-@bot.command(name="posttickets")
-@commands.has_permissions(administrator=True)
-async def cmd_posttickets(ctx: commands.Context):
-    ch = discord.utils.find(lambda c: "tickets" in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
-    embed = discord.Embed(
-        title="🎫 Server Support & Assistance",
-        description="Need assistance or have a server inquiry?\nClick the button below to open a private ticket with staff.",
-        color=discord.Color.teal()
-    )
-    await ch.send(embed=embed, view=TicketLaunchView())
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-@bot.command(name="postconfession")
-@commands.has_permissions(administrator=True)
-async def cmd_postconfession(ctx: commands.Context):
-    ch = discord.utils.find(lambda c: "confession" in normalize_text(c.name) and "panel" not in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
-    embed = discord.Embed(
-        title="💌 Anonymous Confession Portal",
-        description="Click the button below to submit a secure, completely anonymous confession form.\n\n*Your identity is never logged or shown.*",
-        color=discord.Color.from_rgb(230, 70, 80)
-    )
-    await ch.send(embed=embed, view=ConfessionPanelView())
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-@bot.command(name="backup")
-@commands.has_permissions(administrator=True)
-async def cmd_backup(ctx: commands.Context):
-    status = await ctx.send("⏳ **Saving snapshot to `#bot-memory`...**")
-    guild_id = ctx.guild.id
-    state = bot.server_state.setdefault(guild_id, default_server_state())
-    await save_state_to_memory(ctx.guild, data=state)
-    await status.edit(content="✅ **Server state backup committed successfully (3-backup rolling retention applied).**")
-
-@bot.command(name="restorebackup")
-@commands.has_permissions(administrator=True)
-async def cmd_restorebackup(ctx: commands.Context):
-    status = await ctx.send("⏳ **Restoring state from `#bot-memory`...**")
-    data = await load_state_from_memory(ctx.guild)
-
-    bot.server_state[ctx.guild.id] = data
-    embed = discord.Embed(
-        title="📦 Memory Backup Synchronized",
-        description=(
-            f"• **User XP Records:** `{len(data.get('user_xp', {}))}`\n"
-            f"• **Tracked Levels:** `{len(data.get('user_levels', {}))}`\n"
-            f"• **Total Confessions Logged:** `#{data.get('confession_counter', 0)}`\n"
-            f"• **Active Warnings Logged:** `{len(data.get('user_warnings', {}))}`\n"
-            f"• **Tracked Mutes:** `{len(data.get('user_mute_counts', {}))}`\n"
-            f"• **Registered Birthdays:** `{len(data.get('user_birthdays', {}))}`\n"
-            f"• **Maintenance Mode:** `{'Active 🔴' if data.get('maintenance_mode', False) else 'Inactive 🟢'}`\n"
-            f"• **Active Tickets:** `{len(data.get('tickets', {}))}`"
-        ),
-        color=discord.Color.green(),
-        timestamp=discord.utils.utcnow()
-    )
-    await status.edit(content=None, embed=embed)
-
-# ==============================================================================
-# 12. APPLICATION ENTRY POINT
-# ==============================================================================
-
-if __name__ == "__main__":
-    TOKEN = os.getenv("DISCORD_TOKEN")
-    if not TOKEN:
-        print("❌ CRITICAL: DISCORD_TOKEN environment variable is not set!")
-    else:
-        bot.run(TOKEN)
+            if m_str in state
