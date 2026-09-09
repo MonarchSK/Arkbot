@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 # ==============================================================================
 # 1. SERVER ROLES & PERMISSION MATRIX CONFIGURATION
@@ -270,32 +270,6 @@ EXTENDED_SERVER_BLUEPRINT = [
     }
 ]
 
-CRITICAL_PROTECTED_CHANNELS = ["bot-memory", "bot_memory", "backup", "audit-log"]
-
-LEGACY_ROLE_MIGRATION = {
-    "admin": ADMIN_ROLE_NAME,
-    "authority": AUTHORITY_ROLE_NAME,
-    "head moderator": HEAD_MOD_ROLE_NAME,
-    "moderator": MOD_ROLE_NAME,
-    "trial mod": TRIAL_MOD_ROLE_NAME,
-    "team": TEAM_ROLE_NAME,
-    "og": OG_ROLE_NAME,
-    "veteran": VETERAN_ROLE_NAME,
-    "1 year veteran": VETERAN_ROLE_NAME,
-    "bumppings": BUMP_ROLE_NAME,
-    "pollpings": POLL_ROLE_NAME,
-    "roblox": ROBLOX_ROLE_NAME,
-    "male": "Male ★★",
-    "female": "Female ★★",
-    "non-binary": "Non-Binary",
-    "newbie": "୨୧Newbie୨୧",
-    "explorer": "୨ৎ ˖Explorer",
-    "elite": "୨ৎ ˖ Elite",
-    "champion": "୨ৎ ˖ Champion",
-    "legend": "୨ৎ ˖ Legend",
-    "sovereign": "୨ৎ ˖ Sovereign"
-}
-
 # ==============================================================================
 # 2. TEXT NORMALIZATION & RESILIENT HELPERS
 # ==============================================================================
@@ -340,49 +314,56 @@ async def ensure_role_exists(
             return None
     return role
 
+def is_staff_member(member: discord.Member) -> bool:
+    if not member or not getattr(member, "guild", None):
+        return False
+    if member.id == member.guild.owner_id or member.guild_permissions.administrator:
+        return True
+    user_roles = {normalize_text(r.name) for r in member.roles}
+    allowed = {normalize_text(r) for r in RESTRICTED_ADMIN_ROLES}
+    return not user_roles.isdisjoint(allowed)
+
 # ==============================================================================
-# 3. MEMORY STORAGE & SAFE BACKUP ENGINE (#bot-memory)
+# 3. DATABASE STATE & MEMORY ENGINE (#bot-memory)
 # ==============================================================================
 
 memory_lock = asyncio.Lock()
 
-class MemoryEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, datetime):
-            return {"__datetime__": obj.isoformat()}
-        return super().default(obj)
+def default_server_state() -> Dict[str, Any]:
+    return {
+        "user_xp": {},
+        "user_levels": {},
+        "user_warnings": {},
+        "user_mute_counts": {},
+        "afk_users": {},
+        "user_birthdays": {},
+        "last_anniversary": {},
+        "confession_counter": 0,
+        "last_bump_time": 0.0,
+        "maintenance_mode": False,
+        "tickets": {}
+    }
 
-def robust_memory_decoder(dct: dict):
-    for key, value in dct.items():
-        if isinstance(value, dict) and "__datetime__" in value:
-            try:
-                dct[key] = datetime.fromisoformat(value["__datetime__"])
-            except (ValueError, TypeError):
-                pass
-        elif isinstance(value, str):
-            if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", value):
-                try:
-                    dct[key] = datetime.fromisoformat(value)
-                except (ValueError, TypeError):
-                    pass
-    return dct
-
-def migrate_legacy_state_payload(data: dict) -> dict:
+def migrate_state_payload(data: dict) -> dict:
     if not isinstance(data, dict):
-        return {}
-    if "users" in data:
-        for user_id, user_info in data["users"].items():
-            if "roles" in user_info and isinstance(user_info["roles"], list):
-                updated_roles = []
-                for rname in user_info["roles"]:
-                    cleaned = normalize_text(rname)
-                    updated_roles.append(LEGACY_ROLE_MIGRATION.get(cleaned, rname))
-                user_info["roles"] = updated_roles
-    data.setdefault("users", {})
-    data.setdefault("tickets", {})
-    data.setdefault("confessions", [])
-    data.setdefault("afk", {})
-    return data
+        return default_server_state()
+    
+    base = default_server_state()
+    for key in base:
+        if key in data:
+            base[key] = data[key]
+    
+    if "users" in data and isinstance(data["users"], dict):
+        for uid, udata in data["users"].items():
+            if isinstance(udata, dict):
+                base["user_xp"].setdefault(str(uid), udata.get("total_xp", udata.get("xp", 0)))
+                base["user_levels"].setdefault(str(uid), udata.get("level", 1))
+    if "afk" in data and isinstance(data["afk"], dict):
+        base["afk_users"].update(data["afk"])
+    if "confessions" in data and isinstance(data["confessions"], list):
+        base["confession_counter"] = max(base["confession_counter"], len(data["confessions"]))
+
+    return base
 
 async def save_state_to_memory(guild: discord.Guild, memory_channel_name: str = "bot-memory", data: dict = None):
     async with memory_lock:
@@ -397,7 +378,8 @@ async def save_state_to_memory(guild: discord.Guild, memory_channel_name: str = 
             except (discord.Forbidden, discord.HTTPException):
                 return
 
-        raw_json = json.dumps(data or {}, cls=MemoryEncoder, indent=2)
+        payload = data or default_server_state()
+        raw_json = json.dumps(payload, indent=2)
         file_bytes = io.BytesIO(raw_json.encode('utf-8'))
         filename = f"backup_{guild.id}.json"
         
@@ -414,16 +396,16 @@ async def save_state_to_memory(guild: discord.Guild, memory_channel_name: str = 
 async def load_state_from_memory(guild: discord.Guild, memory_channel_name: str = "bot-memory") -> dict:
     channel = discord.utils.find(lambda c: c.name == memory_channel_name, guild.text_channels)
     if not channel:
-        return {}
+        return default_server_state()
 
-    async for message in channel.history(limit=20):
+    async for message in channel.history(limit=25):
         if message.attachments:
             for att in message.attachments:
                 if att.filename.endswith(".json"):
                     try:
                         file_bytes = await att.read()
-                        raw_data = json.loads(file_bytes.decode('utf-8'), object_hook=robust_memory_decoder)
-                        return migrate_legacy_state_payload(raw_data)
+                        raw_data = json.loads(file_bytes.decode('utf-8'))
+                        return migrate_state_payload(raw_data)
                     except Exception:
                         continue
         
@@ -432,15 +414,15 @@ async def load_state_from_memory(guild: discord.Guild, memory_channel_name: str 
             clean_chunk = re.sub(r"^```(?:json)?\n?", "", content, flags=re.IGNORECASE)
             clean_chunk = re.sub(r"\n?```$", "", clean_chunk)
             try:
-                raw_data = json.loads(clean_chunk, object_hook=robust_memory_decoder)
-                return migrate_legacy_state_payload(raw_data)
+                raw_data = json.loads(clean_chunk)
+                return migrate_state_payload(raw_data)
             except json.JSONDecodeError:
                 continue
 
-    return {}
+    return default_server_state()
 
 # ==============================================================================
-# 4. PERMISSION OVERWRITE ROUTER
+# 4. PERMISSION OVERWRITES
 # ==============================================================================
 
 def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, discord.PermissionOverwrite]:
@@ -519,7 +501,7 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
     return overwrites
 
 # ==============================================================================
-# 5. PROGRESSION ENGINE (LEVELS & TENURE)
+# 5. PROGRESSION & MILESTONES ENGINE
 # ==============================================================================
 
 xp_cooldowns: Dict[int, float] = {}
@@ -529,26 +511,27 @@ async def verify_member_tenure(member: discord.Member):
         return
     now = datetime.now(timezone.utc)
     if (now - member.joined_at).days >= 365:
-        og_role = find_role_resilient(member.guild, OG_ROLE_NAME)
-        vet_role = find_role_resilient(member.guild, VETERAN_ROLE_NAME)
-        
-        if not og_role:
-            og_role = await ensure_role_exists(member.guild, OG_ROLE_NAME, discord.Color.dark_magenta())
-        if not vet_role:
-            vet_role = await ensure_role_exists(member.guild, VETERAN_ROLE_NAME, discord.Color.purple())
+        guild = member.guild
+        guild_id = guild.id
+        current_year = str(now.year)
 
-        roles_to_grant = []
-        if og_role and og_role not in member.roles and member.guild.me.top_role > og_role:
-            roles_to_grant.append(og_role)
-        if vet_role and vet_role not in member.roles and member.guild.me.top_role > vet_role:
-            roles_to_grant.append(vet_role)
+        state = bot.server_state.setdefault(guild_id, default_server_state())
+        last_anniv = state["last_anniversary"].get(str(member.id))
 
-        if roles_to_grant:
-            try:
-                await member.add_roles(*roles_to_grant, reason="Tenure: Reached 365-day server milestone")
-                await add_xp(member, 1000, bypass_cooldown=True)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
+        if last_anniv != current_year:
+            og_role = find_role_resilient(guild, OG_ROLE_NAME) or await ensure_role_exists(guild, OG_ROLE_NAME, discord.Color.dark_magenta())
+            vet_role = find_role_resilient(guild, VETERAN_ROLE_NAME) or await ensure_role_exists(guild, VETERAN_ROLE_NAME, discord.Color.purple())
+
+            roles_to_grant = [r for r in [og_role, vet_role] if r and r not in member.roles and guild.me.top_role > r]
+            if roles_to_grant:
+                try:
+                    await member.add_roles(*roles_to_grant, reason="Tenure: 1+ Year Milestone reached")
+                    await add_xp(member, 1000, bypass_cooldown=True)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+            state["last_anniversary"][str(member.id)] = current_year
+            await save_state_to_memory(guild, data=state)
 
 async def sync_member_level_tier(member: discord.Member, new_level: int):
     guild = member.guild
@@ -599,37 +582,35 @@ async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool =
 
     guild = member.guild
     guild_id = guild.id
-    if guild_id not in bot.server_state:
-        bot.server_state[guild_id] = {}
-    users_db = bot.server_state[guild_id].setdefault("users", {})
-    user_data = users_db.setdefault(str(member.id), {"xp": 0, "level": 1, "total_xp": 0})
+    state = bot.server_state.setdefault(guild_id, default_server_state())
+    uid_str = str(member.id)
 
-    user_data["xp"] += xp_amount
-    user_data["total_xp"] = user_data.get("total_xp", 0) + xp_amount
-    needed_xp = user_data["level"] * 300
+    curr_xp = state["user_xp"].get(uid_str, 0) + xp_amount
+    curr_lvl = state["user_levels"].get(uid_str, 1)
 
-    if user_data["xp"] >= needed_xp:
-        user_data["level"] += 1
-        user_data["xp"] -= needed_xp
-        new_level = user_data["level"]
+    state["user_xp"][uid_str] = curr_xp
+    needed_xp = curr_lvl * 300
 
-        await sync_member_level_tier(member, new_level)
+    if curr_xp >= needed_xp:
+        curr_lvl += 1
+        state["user_levels"][uid_str] = curr_lvl
+        await sync_member_level_tier(member, curr_lvl)
 
         ann_ch = discord.utils.find(lambda c: "level-announcements" in normalize_text(c.name), guild.text_channels)
         if ann_ch:
             embed = discord.Embed(
                 title="⚡ Level Advanced!",
-                description=f"Congratulations {member.mention}, you reached **Level {new_level}**! 🎉\nNew role permissions and perks have been unlocked.",
+                description=f"Congratulations {member.mention}, you reached **Level {curr_lvl}**! 🎉\nNew role permissions and perks have been unlocked.",
                 color=discord.Color.gold(),
                 timestamp=discord.utils.utcnow()
             )
             embed.set_thumbnail(url=member.display_avatar.url)
             await ann_ch.send(content=f"🎉 {member.mention}", embed=embed)
 
-        await save_state_to_memory(guild, data=bot.server_state[guild_id])
+        await save_state_to_memory(guild, data=state)
 
 # ==============================================================================
-# 6. INTERACTIVE PERSISTENT UI VIEWS & MODALS
+# 6. INTERACTIVE PANELS, MODALS & VIEWS
 # ==============================================================================
 
 class CommunityRolesView(discord.ui.View):
@@ -679,9 +660,7 @@ class ColorSelect(discord.ui.Select):
         if selected == "Reset Color":
             return await interaction.followup.send("⚪ Removed your cosmetic chat color.", ephemeral=True)
 
-        target_role = find_role_resilient(guild, selected)
-        if not target_role:
-            target_role = await ensure_role_exists(guild, selected, PRO_HEX_COLORS[selected])
+        target_role = find_role_resilient(guild, selected) or await ensure_role_exists(guild, selected, PRO_HEX_COLORS[selected])
 
         if target_role and guild.me.top_role > target_role:
             await member.add_roles(target_role, reason="Self-assigned chat color")
@@ -716,9 +695,7 @@ class GenderSelect(discord.ui.Select):
         if selected == "Remove Gender Role":
             return await interaction.followup.send("⚪ Removed your identity role.", ephemeral=True)
 
-        target_role = find_role_resilient(guild, selected)
-        if not target_role:
-            target_role = await ensure_role_exists(guild, selected, GENDER_ROLES[selected])
+        target_role = find_role_resilient(guild, selected) or await ensure_role_exists(guild, selected, GENDER_ROLES[selected])
 
         if target_role and guild.me.top_role > target_role:
             await member.add_roles(target_role, reason="Identity role self-assignment")
@@ -744,17 +721,15 @@ class ConfessionModal(discord.ui.Modal, title="Anonymous Confession Portal"):
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         guild_id = guild.id
+        state = bot.server_state.setdefault(guild_id, default_server_state())
 
         target_ch = discord.utils.find(lambda c: "confession" in normalize_text(c.name) and "panel" not in normalize_text(c.name), guild.text_channels)
         if not target_ch:
             return await interaction.followup.send("❌ Confession feed channel not found.", ephemeral=True)
 
-        if guild_id not in bot.server_state:
-            bot.server_state[guild_id] = {}
-        confs = bot.server_state[guild_id].setdefault("confessions", [])
-        cid = len(confs) + 1
+        state["confession_counter"] = state.get("confession_counter", 0) + 1
+        cid = state["confession_counter"]
         text = self.confession_text.value
-        confs.append({"id": cid, "content": text, "timestamp": datetime.now(timezone.utc).isoformat()})
 
         embed = discord.Embed(
             title=f"💌 Anonymous Confession #{cid}",
@@ -762,13 +737,13 @@ class ConfessionModal(discord.ui.Modal, title="Anonymous Confession Portal"):
             color=discord.Color.from_rgb(230, 70, 80),
             timestamp=discord.utils.utcnow()
         )
-        embed.set_footer(text="Submit yours via the confession panel form button!")
+        embed.set_footer(text="Submit yours via the confession form panel!")
         msg = await target_ch.send(embed=embed)
         await msg.add_reaction("❤️")
         await msg.add_reaction("💔")
 
         await interaction.followup.send("🤫 Your anonymous confession has been dispatched successfully!", ephemeral=True)
-        await save_state_to_memory(guild, data=bot.server_state[guild_id])
+        await save_state_to_memory(guild, data=state)
 
 class ConfessionPanelView(discord.ui.View):
     def __init__(self):
@@ -788,9 +763,9 @@ class TicketControlsView(discord.ui.View):
         await interaction.followup.send("🔒 **Ticket closing in 5 seconds...**")
         
         guild_id = interaction.guild.id
-        if guild_id in bot.server_state and "tickets" in bot.server_state[guild_id]:
-            bot.server_state[guild_id]["tickets"].pop(str(interaction.channel.id), None)
-            await save_state_to_memory(interaction.guild, data=bot.server_state[guild_id])
+        state = bot.server_state.setdefault(guild_id, default_server_state())
+        state["tickets"].pop(str(interaction.channel.id), None)
+        await save_state_to_memory(interaction.guild, data=state)
 
         await asyncio.sleep(5)
         try:
@@ -827,11 +802,9 @@ class TicketLaunchView(discord.ui.View):
             ch = await guild.create_text_channel(name=ticket_ch_name, category=category, overwrites=overwrites, reason="Support ticket open")
             
             guild_id = guild.id
-            if guild_id not in bot.server_state:
-                bot.server_state[guild_id] = {}
-            tickets_db = bot.server_state[guild_id].setdefault("tickets", {})
-            tickets_db[str(ch.id)] = {"user_id": user.id, "created_at": datetime.now(timezone.utc).isoformat()}
-            await save_state_to_memory(guild, data=bot.server_state[guild_id])
+            state = bot.server_state.setdefault(guild_id, default_server_state())
+            state["tickets"][str(ch.id)] = {"user_id": user.id, "created_at": datetime.now(timezone.utc).isoformat()}
+            await save_state_to_memory(guild, data=state)
 
             embed = discord.Embed(
                 title="🎫 Support Portal",
@@ -844,7 +817,7 @@ class TicketLaunchView(discord.ui.View):
             await interaction.followup.send("❌ Could not create ticket channel.", ephemeral=True)
 
 # ==============================================================================
-# 7. BOT CLIENT & PERMISSION HELPERS
+# 7. BOT CLIENT SETUP & BACKGROUND TASKS
 # ==============================================================================
 
 class ChillVerseBot(commands.Bot):
@@ -853,7 +826,7 @@ class ChillVerseBot(commands.Bot):
         intents.members = True
         intents.message_content = True
         super().__init__(command_prefix=".", intents=intents, help_command=None)
-        self.server_state: Dict[int, Any] = {}
+        self.server_state: Dict[int, Dict[str, Any]] = {}
 
     async def setup_hook(self):
         self.add_view(CommunityRolesView())
@@ -862,18 +835,52 @@ class ChillVerseBot(commands.Bot):
         self.add_view(TicketLaunchView())
         self.add_view(TicketControlsView())
         self.add_view(ConfessionPanelView())
+        self.daily_birthday_check.start()
+        self.auto_backup_loop.start()
+
+    @tasks.loop(minutes=10)
+    async def auto_backup_loop(self):
+        for guild in self.guilds:
+            state = self.server_state.get(guild.id)
+            if state:
+                await save_state_to_memory(guild, data=state)
+
+    @auto_backup_loop.before_loop
+    async def before_auto_backup(self):
+        await self.wait_until_ready()
+
+    @tasks.loop(hours=24)
+    async def daily_birthday_check(self):
+        now = datetime.now(timezone.utc)
+        today_str = now.strftime("%d-%m")
+        for guild in self.guilds:
+            state = self.server_state.get(guild.id, {})
+            birthdays = state.get("user_birthdays", {})
+            bday_ch = discord.utils.find(lambda c: "birthdays" in normalize_text(c.name), guild.text_channels)
+            if not bday_ch:
+                continue
+
+            for uid, bday in birthdays.items():
+                if bday == today_str:
+                    member = guild.get_member(int(uid))
+                    if member:
+                        embed = discord.Embed(
+                            title="🎂 Happy Birthday! 🎉",
+                            description=f"Wishing a wonderful Birthday to {member.mention}! 🥳✨\nHave an amazing day celebrating in Chill-Verse!",
+                            color=discord.Color.gold()
+                        )
+                        embed.set_thumbnail(url=member.display_avatar.url)
+                        await bday_ch.send(content=f"🎉 {member.mention}", embed=embed)
+
+    @daily_birthday_check.before_loop
+    async def before_bday_check(self):
+        await self.wait_until_ready()
 
 bot = ChillVerseBot()
 
 def is_staff_or_admin():
     async def predicate(ctx: commands.Context) -> bool:
-        if not ctx.guild:
-            return False
-        if ctx.author.id == ctx.guild.owner_id or ctx.author.guild_permissions.administrator:
-            return True
-        user_roles = {normalize_text(r.name) for r in ctx.author.roles}
-        allowed = {normalize_text(r) for r in RESTRICTED_ADMIN_ROLES}
-        return not user_roles.isdisjoint(allowed)
+        return is_staff_member(ctx.author)
     return commands.check(predicate)
 
 def is_team_channel():
@@ -905,17 +912,41 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
         pass
 
 # ==============================================================================
-# 8. LISTENERS (AFK, BUMP, BOOSTS, EXP, AUTO-REACTIONS, WELCOME, THREADS)
+# 8. LISTENERS
 # ==============================================================================
+
+async def schedule_bump_reminder(guild: discord.Guild, channel: Optional[discord.TextChannel] = None):
+    state = bot.server_state.setdefault(guild.id, default_server_state())
+    last_bump = state.get("last_bump_time", 0.0)
+    now = time.time()
+    remaining = max(0, int(7200 - (now - last_bump)))
+
+    if remaining > 0:
+        await asyncio.sleep(remaining)
+
+    bump_ch = channel or discord.utils.find(lambda c: "bump" in normalize_text(c.name), guild.text_channels)
+    if bump_ch:
+        role = find_role_resilient(guild, BUMP_ROLE_NAME)
+        ping = role.mention if role else "@here"
+        embed = discord.Embed(
+            title="⏰ Time to Bump!",
+            description="The 2-hour cooldown has passed. Run `/bump` to grow the server! 🚀",
+            color=discord.Color.gold(),
+            timestamp=discord.utils.utcnow()
+        )
+        await bump_ch.send(content=f"🔔 {ping}", embed=embed, allowed_mentions=discord.AllowedMentions(roles=True, everyone=True))
 
 @bot.event
 async def on_ready():
     print(f"Bot connected as {bot.user} (ID: {bot.user.id})")
     for guild in bot.guilds:
         restored = await load_state_from_memory(guild)
-        if restored:
-            bot.server_state[guild.id] = restored
-            print(f"✅ Backups restored for '{guild.name}'")
+        bot.server_state[guild.id] = restored
+        print(f"✅ State loaded for '{guild.name}' ({len(restored.get('user_xp', {}))} users in database)")
+
+        if restored.get("last_bump_time", 0.0) > 0:
+            asyncio.create_task(schedule_bump_reminder(guild))
+
         for member in guild.members:
             if not member.bot:
                 await verify_member_tenure(member)
@@ -924,9 +955,7 @@ async def on_ready():
 async def on_member_join(member: discord.Member):
     if member.bot:
         return
-    newbie_role = find_role_resilient(member.guild, "୨୧Newbie୨୧")
-    if not newbie_role:
-        newbie_role = await ensure_role_exists(member.guild, "୨୧Newbie୨୧", discord.Color.teal())
+    newbie_role = find_role_resilient(member.guild, "୨୧Newbie୨୧") or await ensure_role_exists(member.guild, "୨୧Newbie୨୧", discord.Color.teal())
     if newbie_role and member.guild.me.top_role > newbie_role:
         try:
             await member.add_roles(newbie_role, reason="Auto-assign on onboarding")
@@ -979,24 +1008,32 @@ async def on_message(message: discord.Message):
                         success = True
                         break
             if success and message.guild:
+                state = bot.server_state.setdefault(message.guild.id, default_server_state())
+                state["last_bump_time"] = time.time()
+                await save_state_to_memory(message.guild, data=state)
                 await message.channel.send("🚀 **Bump detected!** Next bump alert in 2 hours.", delete_after=10)
-                asyncio.create_task(bump_reminder_task(message.guild, message.channel))
+                asyncio.create_task(schedule_bump_reminder(message.guild, message.channel))
         return
 
     guild_id = message.guild.id
-    afk_data = bot.server_state.get(guild_id, {}).get("afk", {})
-    user_str = str(message.author.id)
+    state = bot.server_state.setdefault(guild_id, default_server_state())
 
-    if user_str in afk_data:
-        del afk_data[user_str]
+    if state.get("maintenance_mode", False) and not is_staff_member(message.author):
+        if message.content.startswith("."):
+            await message.channel.send("🚧 **Server is currently in Maintenance Mode.** Commands are restricted to staff.", delete_after=6)
+        return
+
+    user_str = str(message.author.id)
+    if user_str in state["afk_users"]:
+        del state["afk_users"][user_str]
         await message.channel.send(f"👋 Welcome back {message.author.mention}, I removed your AFK.", delete_after=10)
-        await save_state_to_memory(message.guild, data=bot.server_state[guild_id])
+        await save_state_to_memory(message.guild, data=state)
 
     if message.mentions:
         for member in message.mentions:
             m_str = str(member.id)
-            if m_str in afk_data and member.id != message.author.id:
-                rec = afk_data[m_str]
+            if m_str in state["afk_users"] and member.id != message.author.id:
+                rec = state["afk_users"][m_str]
                 mins = int((time.time() - rec["timestamp"]) // 60)
                 t_str = f"{mins}m ago" if mins > 0 else "just now"
                 await message.channel.send(f"💤 **{member.display_name}** is AFK: {rec['reason']} *({t_str})*", delete_after=10)
@@ -1026,20 +1063,8 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 # ==============================================================================
-# 9. SYSTEM & USER COMMANDS
+# 9. USER, LEVEL & COMMUNITY COMMANDS
 # ==============================================================================
-
-async def bump_reminder_task(guild: discord.Guild, channel: discord.TextChannel):
-    await asyncio.sleep(7200)
-    role = find_role_resilient(guild, BUMP_ROLE_NAME)
-    ping = role.mention if role else "@here"
-    embed = discord.Embed(
-        title="⏰ Time to Bump!",
-        description="The 2-hour cooldown has passed. Run `/bump` to grow the server! 🚀",
-        color=discord.Color.gold(),
-        timestamp=discord.utils.utcnow()
-    )
-    await channel.send(content=f"🔔 {ping}", embed=embed, allowed_mentions=discord.AllowedMentions(roles=True, everyone=True))
 
 @bot.command(name="afk")
 async def cmd_afk(ctx: commands.Context, *, reason: str = "AFK"):
@@ -1048,14 +1073,11 @@ async def cmd_afk(ctx: commands.Context, *, reason: str = "AFK"):
     except (discord.Forbidden, discord.HTTPException):
         pass
 
-    guild_id = ctx.guild.id
-    if guild_id not in bot.server_state:
-        bot.server_state[guild_id] = {}
-    afk_data = bot.server_state[guild_id].setdefault("afk", {})
-    afk_data[str(ctx.author.id)] = {"reason": reason, "timestamp": time.time()}
+    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+    state["afk_users"][str(ctx.author.id)] = {"reason": reason, "timestamp": time.time()}
 
     await ctx.send(f"💤 {ctx.author.mention}, I set your AFK: **{reason}**", delete_after=10)
-    await save_state_to_memory(ctx.guild, data=bot.server_state[guild_id])
+    await save_state_to_memory(ctx.guild, data=state)
 
 @bot.command(name="bump")
 async def cmd_bump(ctx: commands.Context):
@@ -1064,43 +1086,67 @@ async def cmd_bump(ctx: commands.Context):
     except (discord.Forbidden, discord.HTTPException):
         pass
 
-    await ctx.send(f"👊 {ctx.author.mention}, bump logged! I'll ping **{BUMP_ROLE_NAME}** in 2 hours.", delete_after=10)
+    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+    state["last_bump_time"] = time.time()
     await add_xp(ctx.author, 250, bypass_cooldown=True)
-    asyncio.create_task(bump_reminder_task(ctx.guild, ctx.channel))
+    await save_state_to_memory(ctx.guild, data=state)
+
+    await ctx.send(f"👊 {ctx.author.mention}, bump logged! I'll ping **{BUMP_ROLE_NAME}** in 2 hours.", delete_after=10)
+    asyncio.create_task(schedule_bump_reminder(ctx.guild, ctx.channel))
+
+@bot.command(name="setbirthday", aliases=["setbday"])
+async def cmd_setbirthday(ctx: commands.Context, date_str: str):
+    if not re.match(r"^(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[0-2])$", date_str):
+        return await ctx.send("⚠️ Invalid format! Use `DD-MM` (e.g. `.setbirthday 15-06`).", delete_after=10)
+
+    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+    state["user_birthdays"][str(ctx.author.id)] = date_str
+    await save_state_to_memory(ctx.guild, data=state)
+    await ctx.send(f"🎂 {ctx.author.mention}, your birthday was saved as **{date_str}**!", delete_after=10)
+
+@bot.command(name="birthday", aliases=["bday"])
+async def cmd_birthday(ctx: commands.Context, member: Optional[discord.Member] = None):
+    target = member or ctx.author
+    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+    bday = state["user_birthdays"].get(str(target.id))
+    if bday:
+        await ctx.send(f"🎂 **{target.display_name}**'s birthday is **{bday}** (DD-MM).")
+    else:
+        await ctx.send(f"ℹ️ No birthday saved for **{target.display_name}**.")
 
 @bot.command(name="rank", aliases=["level", "xp"])
 async def cmd_rank(ctx: commands.Context, member: Optional[discord.Member] = None):
     target = member or ctx.author
-    guild_id = ctx.guild.id
-    users_db = bot.server_state.get(guild_id, {}).get("users", {})
-    user_data = users_db.get(str(target.id), {"xp": 0, "level": 1, "total_xp": 0})
+    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+    uid_str = str(target.id)
 
-    lvl = user_data["level"]
-    current_xp = user_data["xp"]
+    lvl = state["user_levels"].get(uid_str, 1)
+    tot_xp = state["user_xp"].get(uid_str, 0)
     needed_xp = lvl * 300
-    progress = min(int((current_xp / max(needed_xp, 1)) * 10), 10)
+    progress = min(int((tot_xp / max(needed_xp, 1)) * 10), 10)
     bar = "▰" * progress + "▱" * (10 - progress)
 
     embed = discord.Embed(title=f"📊 Rank Card — {target.display_name}", color=discord.Color.teal())
     embed.set_thumbnail(url=target.display_avatar.url)
     embed.add_field(name="Level", value=f"**{lvl}**", inline=True)
-    embed.add_field(name="Tier Progress", value=f"{current_xp} / {needed_xp} XP", inline=True)
+    embed.add_field(name="Total XP", value=f"{tot_xp:,} XP", inline=True)
     embed.add_field(name="Progress Bar", value=f"`[{bar}]`", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command(name="leaderboard", aliases=["lb", "top"])
 async def cmd_leaderboard(ctx: commands.Context):
-    guild_id = ctx.guild.id
-    users_db = bot.server_state.get(guild_id, {}).get("users", {})
-    if not users_db:
-        return await ctx.send("ℹ️ No XP records found yet.")
+    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+    users_xp = state["user_xp"]
+    if not users_xp:
+        return await ctx.send("ℹ️ No XP records found in the database yet.")
 
-    sorted_users = sorted(users_db.items(), key=lambda item: item[1].get("total_xp", 0), reverse=True)[:10]
+    sorted_users = sorted(users_xp.items(), key=lambda item: item[1], reverse=True)[:10]
     lines = []
-    for rank, (uid, data) in enumerate(sorted_users, 1):
+    for rank, (uid, xp_val) in enumerate(sorted_users, 1):
         member = ctx.guild.get_member(int(uid))
         name = member.display_name if member else f"User {uid}"
-        lines.append(f"**#{rank}** {name} — Level **{data.get('level', 1)}** ({data.get('total_xp', 0):,} total XP)")
+        lvl = state["user_levels"].get(uid, 1)
+        lines.append(f"**#{rank}** {name} — Level **{lvl}** ({xp_val:,} XP)")
 
     embed = discord.Embed(
         title="🏆 Server XP Leaderboard",
@@ -1153,7 +1199,8 @@ async def cmd_botlist(ctx: commands.Context):
             "• `.setup_channels` — Deploys missing channels & auto-posts panels safely\n"
             "• `.syncperms` — Enforces staff and tier permission matrices\n"
             "• `.autorole_setup` — Provisions all server roles and cosmetic tiers\n"
-            "• `.resetroles` — Wipes and re-provisions all managed server roles"
+            "• `.resetroles` — Wipes and re-provisions all managed server roles\n"
+            "• `.maintenance [on/off]` — Toggles server maintenance lock"
         ),
         inline=False
     )
@@ -1173,7 +1220,10 @@ async def cmd_botlist(ctx: commands.Context):
         value=(
             "• `.kick <member>` — Kicks a user from the server\n"
             "• `.ban <member>` — Bans a user from the server\n"
-            "• `.timeout <member> <mins>` — Mutes a user temporarily\n"
+            "• `.timeout <member> <mins>` — Mutes user & updates mute count\n"
+            "• `.warn <member> [reason]` — Issues official staff warning\n"
+            "• `.warnings <member>` — Views warning and mute record\n"
+            "• `.clearwarns <member>` — Clears warnings for a member\n"
             "• `.purge <amount>` — Clears up to 100 messages"
         ),
         inline=False
@@ -1181,9 +1231,11 @@ async def cmd_botlist(ctx: commands.Context):
     embed.add_field(
         name="🎮 Public & Community Features",
         value=(
-            "• `.rank` — Displays user level, XP progress, and card\n"
+            "• `.rank` — Displays user level, total XP, and card\n"
             "• `.leaderboard` — Shows top 10 most active members by XP\n"
             "• `.afk <reason>` — Sets AFK status with auto-removal and alerts\n"
+            "• `.setbirthday <DD-MM>` — Registers birthday for daily announcements\n"
+            "• `.birthday [member]` — Checks registered birthday\n"
             "• `.bump` — Logs manual server bump and 2-hour reminder timer\n"
             "• `.poll <question>` — Dispatches an official server poll"
         ),
@@ -1202,8 +1254,73 @@ async def cmd_botlist(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 # ==============================================================================
-# 10. MODERATION SUITE
+# 10. MODERATION & MAINTENANCE COMMANDS
 # ==============================================================================
+
+@bot.command(name="maintenance")
+@commands.has_permissions(administrator=True)
+async def cmd_maintenance(ctx: commands.Context, state_arg: Optional[str] = None):
+    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+    
+    if state_arg is None:
+        state["maintenance_mode"] = not state.get("maintenance_mode", False)
+    else:
+        state["maintenance_mode"] = state_arg.lower() in ["on", "enable", "true", "yes"]
+
+    status = state["maintenance_mode"]
+    await save_state_to_memory(ctx.guild, data=state)
+
+    embed = discord.Embed(
+        title="🚧 Maintenance Mode Updated",
+        description=f"Server Maintenance Mode is now **{'ACTIVATED 🔴' if status else 'DEACTIVATED 🟢'}**.\n\n"
+                    f"{'⚠️ Regular commands and non-staff message executions are restricted.' if status else '✅ All public functions and member commands are operational.'}",
+        color=discord.Color.red() if status else discord.Color.green(),
+        timestamp=discord.utils.utcnow()
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name="warn")
+@is_staff_or_admin()
+async def cmd_warn(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided"):
+    if ctx.author.top_role <= member.top_role or member.id == ctx.guild.owner_id:
+        return await ctx.send("❌ You cannot warn a member with equal or higher authority.")
+
+    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+    uid_str = str(member.id)
+    state["user_warnings"][uid_str] = state["user_warnings"].get(uid_str, 0) + 1
+    total = state["user_warnings"][uid_str]
+    await save_state_to_memory(ctx.guild, data=state)
+
+    embed = discord.Embed(
+        title="⚠️ Member Warned",
+        description=f"**User:** {member.mention} ({member.id})\n**Staff:** {ctx.author.mention}\n**Reason:** {reason}\n**Total Warnings:** `{total}`",
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow()
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name="warnings", aliases=["warns"])
+@is_staff_or_admin()
+async def cmd_warnings(ctx: commands.Context, member: discord.Member):
+    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+    uid_str = str(member.id)
+    warns = state["user_warnings"].get(uid_str, 0)
+    mutes = state["user_mute_counts"].get(uid_str, 0)
+
+    embed = discord.Embed(
+        title=f"📋 Infraction History — {member.display_name}",
+        description=f"• **Warnings:** `{warns}`\n• **Mutes / Timeouts:** `{mutes}`",
+        color=discord.Color.teal()
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name="clearwarns", aliases=["clearwarnings"])
+@is_staff_or_admin()
+async def cmd_clearwarns(ctx: commands.Context, member: discord.Member):
+    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+    state["user_warnings"][str(member.id)] = 0
+    await save_state_to_memory(ctx.guild, data=state)
+    await ctx.send(f"✅ Cleared all warnings for **{member.display_name}**.")
 
 @bot.command(name="kick")
 @commands.has_permissions(kick_members=True)
@@ -1241,7 +1358,13 @@ async def cmd_timeout(ctx: commands.Context, member: discord.Member, minutes: in
     try:
         until = discord.utils.utcnow() + timedelta(minutes=minutes)
         await member.timeout(until, reason=f"{reason} (By {ctx.author})")
-        await ctx.send(f"⏳ Timed out **{member.display_name}** for {minutes} minute(s) | Reason: {reason}")
+
+        state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+        uid_str = str(member.id)
+        state["user_mute_counts"][uid_str] = state["user_mute_counts"].get(uid_str, 0) + 1
+        await save_state_to_memory(ctx.guild, data=state)
+
+        await ctx.send(f"⏳ Timed out **{member.display_name}** for {minutes} min(s) | Total Mutes: `{state['user_mute_counts'][uid_str]}`")
     except discord.Forbidden:
         await ctx.send("❌ Failed to timeout. Check bot permissions and role order.")
 
@@ -1255,7 +1378,7 @@ async def cmd_purge(ctx: commands.Context, amount: int):
     await ctx.send(f"🧹 Purged **{len(deleted)}** message(s).", delete_after=5)
 
 # ==============================================================================
-# 11. DEPLOYMENT, SAFE CHANNELS & ROLE SETUP
+# 11. DEPLOYMENT, SAFE CHANNELS & ROLE MANAGEMENT
 # ==============================================================================
 
 @bot.command(name="syncperms")
@@ -1266,13 +1389,7 @@ async def cmd_syncperms(ctx: commands.Context):
     updated, failed = [], []
 
     for rname, cfg in ROLE_PERMISSIONS_CONFIG.items():
-        role = find_role_resilient(guild, rname)
-        if not role:
-            role = await ensure_role_exists(guild, rname, cfg["color"], cfg["permissions"], cfg["hoist"])
-            updated.append(f"✨ Created staff role `{rname}`")
-            await asyncio.sleep(0.35)
-            continue
-
+        role = find_role_resilient(guild, rname) or await ensure_role_exists(guild, rname, cfg["color"], cfg["permissions"], cfg["hoist"])
         if guild.me.top_role > role:
             if role.permissions != cfg["permissions"] or role.hoist != cfg["hoist"]:
                 try:
@@ -1285,13 +1402,7 @@ async def cmd_syncperms(ctx: commands.Context):
             failed.append(f"⚠️ `{role.name}` is positioned above the bot")
 
     for (low, high), cfg in LEVEL_TIER_ROLES.items():
-        role = find_role_resilient(guild, cfg["name"])
-        if not role:
-            role = await ensure_role_exists(guild, cfg["name"], cfg["color"], cfg["permissions"], cfg["hoist"])
-            updated.append(f"✨ Created tier `{cfg['name']}`")
-            await asyncio.sleep(0.35)
-            continue
-
+        role = find_role_resilient(guild, cfg["name"]) or await ensure_role_exists(guild, cfg["name"], cfg["color"], cfg["permissions"], cfg["hoist"])
         if guild.me.top_role > role:
             if role.permissions != cfg["permissions"] or role.hoist != cfg["hoist"]:
                 try:
@@ -1407,7 +1518,6 @@ async def cmd_setup_channels(ctx: commands.Context):
             overwrites = generate_channel_overwrites(guild, scheme)
 
             target_list = guild.text_channels if ch_type == "text" else guild.voice_channels
-            # Look for existing channel by name within this category to avoid touching working ones
             channel = discord.utils.find(lambda c: normalize_text(c.name) == normalize_text(ch_name) and c.category_id == category.id, target_list)
 
             if not channel:
@@ -1533,24 +1643,29 @@ async def cmd_postconfession(ctx: commands.Context):
 async def cmd_backup(ctx: commands.Context):
     status = await ctx.send("⏳ **Saving snapshot to `#bot-memory`...**")
     guild_id = ctx.guild.id
-    if guild_id in bot.server_state:
-        await save_state_to_memory(ctx.guild, data=bot.server_state[guild_id])
-        await status.edit(content="✅ **Server state backup committed successfully.**")
-    else:
-        await status.edit(content="ℹ️ No local state found to back up.")
+    state = bot.server_state.setdefault(guild_id, default_server_state())
+    await save_state_to_memory(ctx.guild, data=state)
+    await status.edit(content="✅ **Server state backup committed successfully.**")
 
 @bot.command(name="restorebackup")
 @commands.has_permissions(administrator=True)
 async def cmd_restorebackup(ctx: commands.Context):
     status = await ctx.send("⏳ **Restoring state from `#bot-memory`...**")
     data = await load_state_from_memory(ctx.guild)
-    if not data:
-        return await status.edit(content="❌ No valid backup found in `#bot-memory`.")
 
     bot.server_state[ctx.guild.id] = data
     embed = discord.Embed(
         title="📦 Memory Backup Synchronized",
-        description=f"• **User Records:** `{len(data.get('users', {}))}`\n• **Active Tickets:** `{len(data.get('tickets', {}))}`\n• **Logged Confessions:** `{len(data.get('confessions', []))}`\n• **Active AFK Records:** `{len(data.get('afk', {}))}`",
+        description=(
+            f"• **User XP Records:** `{len(data.get('user_xp', {}))}`\n"
+            f"• **Tracked Levels:** `{len(data.get('user_levels', {}))}`\n"
+            f"• **Total Confessions Logged:** `#{data.get('confession_counter', 0)}`\n"
+            f"• **Active Warnings Logged:** `{len(data.get('user_warnings', {}))}`\n"
+            f"• **Tracked Mutes:** `{len(data.get('user_mute_counts', {}))}`\n"
+            f"• **Registered Birthdays:** `{len(data.get('user_birthdays', {}))}`\n"
+            f"• **Maintenance Mode:** `{'Active 🔴' if data.get('maintenance_mode', False) else 'Inactive 🟢'}`\n"
+            f"• **Active Tickets:** `{len(data.get('tickets', {}))}`"
+        ),
         color=discord.Color.green(),
         timestamp=discord.utils.utcnow()
     )
