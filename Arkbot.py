@@ -329,4 +329,13 @@ async def backup(ctx):
     await ch.send(file=file)
     await ctx.send("Backup complete!", delete_after=5)
 
-bot.run("YOUR_BOT_TOKEN_HERE")
+# ==============================================================================
+# RUN BOT
+# ==============================================================================
+
+if __name__ == "__main__":
+    TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    if not TOKEN:
+        print("⚠️ Error: DISCORD_BOT_TOKEN environment variable not found.")
+    else:
+        bot.run(TOKEN)
