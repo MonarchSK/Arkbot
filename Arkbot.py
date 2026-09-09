@@ -54,6 +54,8 @@ PRO_HEX_COLORS = {
     "Pro Hex Green":  discord.Color.green()
 }
 
+MAX_LEVEL = 70
+
 LEVEL_TIER_ROLES = {
     (1, 9): {
         "name": "୨୧Newbie୨୧",
@@ -124,7 +126,7 @@ LEVEL_TIER_ROLES = {
             priority_speaker=True, create_private_threads=True
         )
     },
-    (60, 60): {
+    (60, 70): {
         "name": "୨ৎ ˖ Sovereign",
         "color": discord.Color.dark_red(),
         "hoist": True,
@@ -591,7 +593,7 @@ async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool =
     state["user_xp"][uid_str] = curr_xp
     needed_xp = curr_lvl * 300
 
-    if curr_xp >= needed_xp:
+    if curr_lvl < MAX_LEVEL and curr_xp >= needed_xp:
         curr_lvl += 1
         state["user_levels"][uid_str] = curr_lvl
         await sync_member_level_tier(member, curr_lvl)
@@ -1025,8 +1027,19 @@ async def on_message(message: discord.Message):
 
     user_str = str(message.author.id)
     if user_str in state["afk_users"]:
-        del state["afk_users"][user_str]
-        await message.channel.send(f"👋 Welcome back {message.author.mention}, I removed your AFK.", delete_after=10)
+        afk_entry = state["afk_users"].pop(user_str, {})
+        spent_time = int((time.time() - afk_entry.get("timestamp", time.time())) // 60)
+        spent_str = f"{spent_time} minute(s)" if spent_time > 0 else "a few seconds"
+        mood = afk_entry.get("mood", "neutral")
+
+        if mood == "sad":
+            greet = f"🤍 Welcome back {message.author.mention}! We hope your day is getting brighter. I've cleared your AFK. *(Away for {spent_str})*"
+        elif mood == "happy":
+            greet = f"🎉 Welcome back {message.author.mention}! Hope you had a fantastic time! I've cleared your AFK. *(Away for {spent_str})* 😊"
+        else:
+            greet = f"👋 Welcome back {message.author.mention}! I've removed your AFK. *(Away for {spent_str})*"
+
+        await message.channel.send(greet, delete_after=10)
         await save_state_to_memory(message.guild, data=state)
 
     if message.mentions:
@@ -1036,7 +1049,16 @@ async def on_message(message: discord.Message):
                 rec = state["afk_users"][m_str]
                 mins = int((time.time() - rec["timestamp"]) // 60)
                 t_str = f"{mins}m ago" if mins > 0 else "just now"
-                await message.channel.send(f"💤 **{member.display_name}** is AFK: {rec['reason']} *({t_str})*", delete_after=10)
+                m_mood = rec.get("mood", "neutral")
+
+                if m_mood == "sad":
+                    note = f"🥺 **{member.display_name}** is AFK feeling down: *{rec['reason']}* `({t_str})` 💔"
+                elif m_mood == "happy":
+                    note = f"✨ **{member.display_name}** is AFK vibing: *{rec['reason']}* `({t_str})` 😊"
+                else:
+                    note = f"💤 **{member.display_name}** is AFK: *{rec['reason']}* `({t_str})`"
+
+                await message.channel.send(note, delete_after=10)
 
     ch_name = normalize_text(message.channel.name)
     if "vouch" in ch_name:
@@ -1074,10 +1096,41 @@ async def cmd_afk(ctx: commands.Context, *, reason: str = "AFK"):
         pass
 
     state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
-    state["afk_users"][str(ctx.author.id)] = {"reason": reason, "timestamp": time.time()}
 
-    await ctx.send(f"💤 {ctx.author.mention}, I set your AFK: **{reason}**", delete_after=10)
+    mood = "neutral"
+    lower_r = reason.lower()
+    sad_words = ["sad", "depressed", "cry", "crying", "unhappy", "down", "hurt", "tired", "heartbroken", "gloomy", "lonely"]
+    happy_words = ["happy", "glad", "joy", "excited", "vibing", "celebrate", "chilling", "good", "fun", "blessed"]
+
+    if any(w in lower_r for w in sad_words):
+        mood = "sad"
+        status_header = "🥺 Gone AFK (Feeling Down)"
+        color = discord.Color.from_rgb(130, 140, 200)
+        subtext = "Hope you feel better soon! Take care of yourself 🤍"
+    elif any(w in lower_r for w in happy_words):
+        mood = "happy"
+        status_header = "✨ Gone AFK (Feeling Great!)"
+        color = discord.Color.gold()
+        subtext = "Enjoy your time and keep smiling! ✨"
+    else:
+        status_header = "💤 Gone AFK"
+        color = discord.Color.teal()
+        subtext = "I'll let everyone know you're away."
+
+    state["afk_users"][str(ctx.author.id)] = {
+        "reason": reason,
+        "timestamp": time.time(),
+        "mood": mood
+    }
     await save_state_to_memory(ctx.guild, data=state)
+
+    embed = discord.Embed(
+        title=status_header,
+        description=f"{ctx.author.mention} is now AFK: **{reason}**\n*{subtext}*",
+        color=color
+    )
+    embed.set_footer(text="Notice clears in 10s. AFK remains saved until you speak again!")
+    await ctx.send(embed=embed, delete_after=10)
 
 @bot.command(name="bump")
 async def cmd_bump(ctx: commands.Context):
@@ -1093,6 +1146,35 @@ async def cmd_bump(ctx: commands.Context):
 
     await ctx.send(f"👊 {ctx.author.mention}, bump logged! I'll ping **{BUMP_ROLE_NAME}** in 2 hours.", delete_after=10)
     asyncio.create_task(schedule_bump_reminder(ctx.guild, ctx.channel))
+
+@bot.command(name="bumptimer", aliases=["nextbump", "bumpcheck", "bp"])
+async def cmd_bumptimer(ctx: commands.Context):
+    state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+    last_bump = state.get("last_bump_time", 0.0)
+    elapsed = time.time() - last_bump
+    remaining = int(7200 - elapsed)
+
+    if remaining > 0:
+        mins, secs = divmod(remaining, 60)
+        hours, mins = divmod(mins, 60)
+        time_str = f"{hours}h {mins}m {secs}s" if hours > 0 else f"{mins}m {secs}s"
+        progress = min(int((elapsed / 7200) * 10), 10)
+        bar = "▰" * progress + "▱" * (10 - progress)
+
+        embed = discord.Embed(
+            title="⏰ Server Bump Countdown",
+            description=f"Next bump will be ready in **{time_str}**!\n\n`[{bar}]`",
+            color=discord.Color.gold()
+        )
+        embed.set_footer(text=f"Requested by {ctx.author.display_name}")
+        await ctx.send(embed=embed)
+    else:
+        embed = discord.Embed(
+            title="🚀 Bump Ready!",
+            description="The server is ready to be bumped right now! Run `/bump` to grow the server.",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
 
 @bot.command(name="setbirthday", aliases=["setbday"])
 async def cmd_setbirthday(ctx: commands.Context, date_str: str):
@@ -1123,13 +1205,21 @@ async def cmd_rank(ctx: commands.Context, member: Optional[discord.Member] = Non
     lvl = state["user_levels"].get(uid_str, 1)
     tot_xp = state["user_xp"].get(uid_str, 0)
     needed_xp = lvl * 300
-    progress = min(int((tot_xp / max(needed_xp, 1)) * 10), 10)
-    bar = "▰" * progress + "▱" * (10 - progress)
+
+    if lvl >= MAX_LEVEL:
+        lvl_display = f"{lvl} (MAX)"
+        progress_text = f"{tot_xp:,} XP (Maximum Level Reached)"
+        bar = "▰" * 10
+    else:
+        lvl_display = str(lvl)
+        progress = min(int((tot_xp / max(needed_xp, 1)) * 10), 10)
+        bar = "▰" * progress + "▱" * (10 - progress)
+        progress_text = f"{tot_xp:,} / {needed_xp:,} XP"
 
     embed = discord.Embed(title=f"📊 Rank Card — {target.display_name}", color=discord.Color.teal())
     embed.set_thumbnail(url=target.display_avatar.url)
-    embed.add_field(name="Level", value=f"**{lvl}**", inline=True)
-    embed.add_field(name="Total XP", value=f"{tot_xp:,} XP", inline=True)
+    embed.add_field(name="Level", value=f"**{lvl_display}**", inline=True)
+    embed.add_field(name="Progress", value=progress_text, inline=True)
     embed.add_field(name="Progress Bar", value=f"`[{bar}]`", inline=False)
     await ctx.send(embed=embed)
 
@@ -1146,7 +1236,8 @@ async def cmd_leaderboard(ctx: commands.Context):
         member = ctx.guild.get_member(int(uid))
         name = member.display_name if member else f"User {uid}"
         lvl = state["user_levels"].get(uid, 1)
-        lines.append(f"**#{rank}** {name} — Level **{lvl}** ({xp_val:,} XP)")
+        lvl_str = f"**{lvl} (MAX)**" if lvl >= MAX_LEVEL else f"**{lvl}**"
+        lines.append(f"**#{rank}** {name} — Level {lvl_str} ({xp_val:,} XP)")
 
     embed = discord.Embed(
         title="🏆 Server XP Leaderboard",
@@ -1231,12 +1322,13 @@ async def cmd_botlist(ctx: commands.Context):
     embed.add_field(
         name="🎮 Public & Community Features",
         value=(
-            "• `.rank` — Displays user level, total XP, and card\n"
+            "• `.rank` — Displays user level (capped at 70), total XP, and card\n"
             "• `.leaderboard` — Shows top 10 most active members by XP\n"
-            "• `.afk <reason>` — Sets AFK status with auto-removal and alerts\n"
+            "• `.afk [reason]` — Sets happy/sad/custom AFK status with 10s auto-delete\n"
+            "• `.bumptimer` — Checks exact countdown until next bump\n"
+            "• `.bump` — Logs manual server bump and 2-hour reminder timer\n"
             "• `.setbirthday <DD-MM>` — Registers birthday for daily announcements\n"
             "• `.birthday [member]` — Checks registered birthday\n"
-            "• `.bump` — Logs manual server bump and 2-hour reminder timer\n"
             "• `.poll <question>` — Dispatches an official server poll"
         ),
         inline=False
