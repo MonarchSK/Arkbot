@@ -5,11 +5,10 @@ import json
 import os
 import time
 import random
-import io
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 
 # ==============================================================================
-# 1. SERVER ROLES & PERMISSION MATRIX CONFIGURATION (FULL UNABRIDGED)
+# 1. SERVER ROLES & PERMISSION MATRIX CONFIGURATION
 # ==============================================================================
 
 SUPREME_LEADER_ROLE_NAME = "Supreme Leader"
@@ -279,7 +278,7 @@ EXTENDED_SERVER_BLUEPRINT = [
 ]
 
 # ==============================================================================
-# 3. INITIALIZATION, STATE ENGINE & ERROR LOGGING
+# 3. INITIALIZATION & STATE ENGINE
 # ==============================================================================
 
 intents = discord.Intents.default()
@@ -306,15 +305,6 @@ def default_server_state() -> Dict[str, Any]:
         "maintenance_mode": False
     }
 
-async def log_bot_error(guild: discord.Guild, source: str, error_msg: str):
-    log_ch = discord.utils.find(lambda c: "supreme-logs" in normalize_text(c.name) or "staff-logs" in normalize_text(c.name), guild.text_channels)
-    if log_ch:
-        try:
-            embed = discord.Embed(title=f"⚠️ System Error [{source}]", description=f"`{error_msg}`", color=discord.Color.red(), timestamp=discord.utils.utcnow())
-            await log_ch.send(embed=embed)
-        except Exception:
-            pass
-
 async def load_state_from_memory(guild: discord.Guild) -> Dict[str, Any]:
     memory_ch = discord.utils.find(lambda c: "bot-memory" in normalize_text(c.name), guild.text_channels)
     if not memory_ch:
@@ -324,8 +314,8 @@ async def load_state_from_memory(guild: discord.Guild) -> Dict[str, Any]:
             if msg.author == guild.me and msg.content.startswith("```json"):
                 raw = msg.content.replace("```json", "").replace("```", "").strip()
                 return json.loads(raw)
-    except Exception as e:
-        await log_bot_error(guild, "LoadMemory", str(e))
+    except Exception:
+        pass
     return default_server_state()
 
 async def save_state_to_memory(guild: discord.Guild, data: Optional[Dict[str, Any]] = None):
@@ -338,7 +328,7 @@ async def save_state_to_memory(guild: discord.Guild, data: Optional[Dict[str, An
                 guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
                 guild.default_role: discord.PermissionOverwrite(view_channel=False)
             }
-            memory_ch = await guild.create_text_channel("🤖・bot-memory", overwrites=overwrites, reason="Create persistent state channel")
+            memory_ch = await guild.create_text_channel("🤖・bot-memory", overwrites=overwrites, reason="Create state channel")
         except Exception:
             return
 
@@ -350,8 +340,8 @@ async def save_state_to_memory(guild: discord.Guild, data: Optional[Dict[str, An
                 await msg.edit(content=content)
                 return
         await memory_ch.send(content=content)
-    except Exception as e:
-        await log_bot_error(guild, "SaveMemory", str(e))
+    except Exception:
+        pass
 
 def find_role_resilient(guild: discord.Guild, role_name: str) -> Optional[discord.Role]:
     norm_target = normalize_text(role_name)
@@ -384,10 +374,10 @@ async def ensure_role_exists(guild: discord.Guild, name: str, color: discord.Col
     role = find_role_resilient(guild, name)
     if not role:
         try:
-            role = await guild.create_role(name=name, color=color, permissions=permissions, hoist=hoist, mentionable=mentionable, reason="Chill-Verse role provisioning")
+            role = await guild.create_role(name=name, color=color, permissions=permissions, hoist=hoist, mentionable=mentionable, reason="Chill-Verse role sync")
             await asyncio.sleep(0.35)
-        except Exception as e:
-            await log_bot_error(guild, "EnsureRole", str(e))
+        except Exception:
+            pass
     return role
 
 def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, discord.PermissionOverwrite]:
@@ -481,7 +471,7 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
     return overwrites
 
 # ==============================================================================
-# 4. INTERACTIVE UI VIEWS & MODALS (FULL SUB-SYSTEMS)
+# 4. INTERACTIVE UI VIEWS & MODALS
 # ==============================================================================
 
 class ColorDropdown(discord.ui.Select):
@@ -513,8 +503,8 @@ class ColorDropdown(discord.ui.Select):
             try:
                 await member.add_roles(target_role)
                 await interaction.response.send_message(f"✨ Color set to **{selected}**!", ephemeral=True)
-            except Exception as e:
-                await interaction.response.send_message(f"⚠️ Error assigning role: `{e}`", ephemeral=True)
+            except Exception:
+                await interaction.response.send_message("⚠️ Error assigning role.", ephemeral=True)
 
 class ColorView(discord.ui.View):
     def __init__(self):
@@ -543,9 +533,9 @@ class GenderDropdown(discord.ui.Select):
         if target_role:
             try:
                 await member.add_roles(target_role)
-                await interaction.response.send_message(f"👤 Identity role set to **{selected}**!", ephemeral=True)
-            except Exception as e:
-                await interaction.response.send_message(f"⚠️ Error assigning role: `{e}`", ephemeral=True)
+                await interaction.response.send_message(f"👤 Identity set to **{selected}**!", ephemeral=True)
+            except Exception:
+                await interaction.response.send_message("⚠️ Error assigning identity role.", ephemeral=True)
 
 class IdentityView(discord.ui.View):
     def __init__(self):
@@ -672,8 +662,8 @@ async def auto_deploy_server_panels(guild: discord.Guild):
                         except Exception:
                             pass
             await channel.send(embed=embed, view=view)
-        except Exception as e:
-            await log_bot_error(guild, "RefreshPanel", str(e))
+        except Exception:
+            pass
 
     colors_ch = discord.utils.find(lambda c: "colours" in normalize_text(c.name), guild.text_channels)
     if colors_ch:
@@ -761,9 +751,9 @@ async def run_full_server_bootstrap(guild: discord.Guild):
 
                 if not channel:
                     if ch_type == "text":
-                        await guild.create_text_channel(name=ch_name, category=category, overwrites=overwrites, reason="Bootstrap channel creation")
+                        await guild.create_text_channel(name=ch_name, category=category, overwrites=overwrites, reason="Bootstrap channel")
                     else:
-                        await guild.create_voice_channel(name=ch_name, category=category, user_limit=user_lim, overwrites=overwrites, reason="Bootstrap voice channel")
+                        await guild.create_voice_channel(name=ch_name, category=category, user_limit=user_lim, overwrites=overwrites, reason="Bootstrap voice")
                     await asyncio.sleep(0.35)
 
         valid_channel_names = set()
@@ -775,14 +765,14 @@ async def run_full_server_bootstrap(guild: discord.Guild):
         for channel in list(guild.text_channels + guild.voice_channels):
             if normalize_text(channel.name) not in valid_channel_names:
                 try:
-                    await channel.delete(reason="Bootstrap cleanup: Unlisted extra channel")
+                    await channel.delete(reason="Bootstrap cleanup")
                     await asyncio.sleep(0.35)
                 except Exception:
                     pass
 
         await auto_deploy_server_panels(guild)
-    except Exception as e:
-        await log_bot_error(guild, "ServerBootstrap", str(e))
+    except Exception:
+        pass
 
 # ==============================================================================
 # 6. XP, LEVELING, TENURE & AFK SYSTEMS
@@ -977,11 +967,11 @@ async def on_message(message: discord.Message):
 
         await handle_user_xp_and_level(message)
         await bot.process_commands(message)
-    except Exception as e:
-        await log_bot_error(message.guild, "OnMessage", str(e))
+    except Exception:
+        pass
 
 # ==============================================================================
-# 10. COMPLETE COMMANDS SUITE (FULL UNABRIDGED)
+# 10. COMPLETE COMMANDS SUITE
 # ==============================================================================
 
 def check_maintenance_mode():
