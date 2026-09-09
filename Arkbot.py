@@ -372,6 +372,9 @@ async def save_state_to_memory(guild: discord.Guild, memory_channel_name: str = 
                 guild.default_role: discord.PermissionOverwrite(read_messages=False),
                 guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
             }
+            admin_role = find_role_resilient(guild, ADMIN_ROLE_NAME)
+            if admin_role:
+                overwrites[admin_role] = discord.PermissionOverwrite(read_messages=False)
             try:
                 channel = await guild.create_text_channel(name=memory_channel_name, overwrites=overwrites)
             except (discord.Forbidden, discord.HTTPException):
@@ -452,21 +455,33 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
         )
     }
 
-    if scheme == "public_chat":
-        overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, read_message_history=True, add_reactions=True
-        )
-    elif scheme == "public_media":
-        overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, read_message_history=True,
-            attach_files=True, embed_links=True, add_reactions=True
-        )
-    elif scheme in ["public_read", "polls_feed", "confession_feed"]:
-        overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, send_messages=False, read_message_history=True, add_reactions=True
-        )
+    public_schemes = ["public_chat", "public_media", "public_read", "polls_feed", "confession_feed", "public_voice", "vip_voice", "music_voice"]
+    if scheme in public_schemes:
+        if scheme == "public_chat":
+            overwrites[guild.default_role] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True, add_reactions=True
+            )
+        elif scheme == "public_media":
+            overwrites[guild.default_role] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True,
+                attach_files=True, embed_links=True, add_reactions=True
+            )
+        elif scheme in ["public_read", "polls_feed", "confession_feed"]:
+            overwrites[guild.default_role] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=False, read_message_history=True, add_reactions=True
+            )
+        elif scheme in ["public_voice", "vip_voice"]:
+            overwrites[guild.default_role] = discord.PermissionOverwrite(
+                view_channel=True, connect=True, speak=True, stream=True
+            )
+        elif scheme == "music_voice":
+            overwrites[guild.default_role] = discord.PermissionOverwrite(
+                view_channel=True, connect=True, speak=True, stream=False, use_soundboard=False
+            )
+            
         for role in active_staff:
-            overwrites[role] = discord.PermissionOverwrite(send_messages=True)
+            overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+
     elif scheme == "roblox_exclusive":
         overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
         if roblox_role:
@@ -478,22 +493,7 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
             overwrites[role] = discord.PermissionOverwrite(
                 view_channel=True, send_messages=True, read_message_history=True
             )
-    elif scheme == "public_voice":
-        overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, connect=True, speak=True, stream=True
-        )
-    elif scheme == "vip_voice":
-        overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, connect=True, speak=True, stream=True
-        )
-        if admin_role:
-            overwrites[admin_role] = discord.PermissionOverwrite(
-                priority_speaker=True, move_members=True, mute_members=True
-            )
-    elif scheme == "music_voice":
-        overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, connect=True, speak=True, stream=False, use_soundboard=False
-        )
+
     elif scheme == "staff_chat":
         overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
         for role in active_staff:
@@ -501,6 +501,7 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
                 view_channel=True, send_messages=True, read_message_history=True,
                 attach_files=True, embed_links=True
             )
+
     elif scheme in ["staff_rules", "staff_news"]:
         overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
         for role in active_staff:
@@ -511,6 +512,7 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
             overwrites[admin_role] = discord.PermissionOverwrite(
                 view_channel=True, send_messages=True, manage_messages=True
             )
+            
     return overwrites
 
 # ==============================================================================
@@ -615,17 +617,33 @@ async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool =
 
     if curr_lvl > initial_lvl:
         await sync_member_level_tier(member, curr_lvl)
+        
+        current_tier_name = "Standard Member"
+        for (min_l, max_l), cfg in LEVEL_TIER_ROLES.items():
+            if min_l <= curr_lvl <= max_l:
+                current_tier_name = cfg["name"]
+                break
+
+        next_goal_xp = curr_lvl * 300
         ann_ch = discord.utils.find(lambda c: "level-announcements" in normalize_text(c.name), guild.text_channels)
+        
         if ann_ch:
             embed = discord.Embed(
-                title="⚡ Level Advanced!",
-                description=f"Congratulations {member.mention}, you reached **Level {curr_lvl}**! 🎉\nNew role permissions and perks unlocked.",
+                title="⚡ Milestone Reached — Level Up!",
+                description=(
+                    f"Congratulations {member.mention}! You've climbed higher in Chill-Verse. 🎉\n\n"
+                    f"• **New Level:** `Level {curr_lvl}` / `{MAX_LEVEL}`\n"
+                    f"• **Unlocked Tier Role:** `{current_tier_name}`\n"
+                    f"• **Next Level Target:** `{curr_xp:,} / {next_goal_xp:,} XP`"
+                ),
                 color=discord.Color.gold(),
                 timestamp=discord.utils.utcnow()
             )
             embed.set_thumbnail(url=member.display_avatar.url)
+            embed.set_footer(text="Keep chatting in voice & text to unlock more perks!")
+            
             try:
-                await ann_ch.send(content=f"🎉 {member.mention}", embed=embed)
+                await ann_ch.send(content=f"🎉 Great job, {member.mention}!", embed=embed)
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
@@ -734,7 +752,7 @@ class ConfessionModal(discord.ui.Modal, title="Anonymous Confession Portal"):
     confession_text = discord.ui.TextInput(
         label="Your Confession",
         style=discord.TextStyle.paragraph,
-        placeholder="Type your anonymous confession here...",
+        placeholder="Type your 100% anonymous confession here...",
         required=True,
         max_length=1500
     )
@@ -759,19 +777,20 @@ class ConfessionModal(discord.ui.Modal, title="Anonymous Confession Portal"):
             color=discord.Color.from_rgb(230, 70, 80),
             timestamp=discord.utils.utcnow()
         )
-        embed.set_footer(text="Submit yours via the confession form panel!")
+        embed.set_footer(text="100% Anonymous • Submit yours via the confession panel!")
+        
         msg = await target_ch.send(embed=embed)
         await msg.add_reaction("❤️")
         await msg.add_reaction("💔")
 
-        await interaction.followup.send("🤫 Your anonymous confession has been dispatched successfully!", ephemeral=True)
+        await interaction.followup.send("🤫 Your confession has been sent anonymously. Your identity was never recorded!", ephemeral=True)
         await save_state_to_memory(guild, data=state)
 
 class ConfessionPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Write Confession", style=discord.ButtonStyle.danger, emoji="💌", custom_id="btn_open_confession_modal")
+    @discord.ui.button(label="Confess Anonymously", style=discord.ButtonStyle.danger, emoji="💌", custom_id="btn_open_confession_modal")
     async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ConfessionModal())
 
@@ -963,7 +982,7 @@ async def schedule_bump_reminder(guild: discord.Guild, channel: Optional[discord
                 ping = role.mention if role else "@here"
                 embed = discord.Embed(
                     title="⏰ Time to Bump!",
-                    description="The 2-hour cooldown has passed. Run `/bump` to grow the server! 🚀",
+                    description="The 2-hour cooldown has passed. Run `/bump` or `.bump` to grow the server! 🚀",
                     color=discord.Color.gold(),
                     timestamp=discord.utils.utcnow()
                 )
@@ -1185,6 +1204,16 @@ async def cmd_bump(ctx: commands.Context):
         pass
 
     state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
+    last_bump = state.get("last_bump_time", 0.0)
+    elapsed = time.time() - last_bump
+    remaining = int(7200 - elapsed)
+
+    if remaining > 0 and not is_staff_member(ctx.author):
+        mins, secs = divmod(remaining, 60)
+        hours, mins = divmod(mins, 60)
+        time_str = f"{hours}h {mins}m {secs}s" if hours > 0 else f"{mins}m {secs}s"
+        return await ctx.send(f"⏳ {ctx.author.mention}, the server cannot be bumped yet! Please wait **{time_str}** until the 2-hour timer completes.", delete_after=8)
+
     state["last_bump_time"] = time.time()
     await add_xp(ctx.author, 250, bypass_cooldown=True)
     await save_state_to_memory(ctx.guild, data=state)
@@ -1216,10 +1245,34 @@ async def cmd_bumptimer(ctx: commands.Context):
     else:
         embed = discord.Embed(
             title="🚀 Bump Ready!",
-            description="The server is ready to be bumped right now! Run `/bump` to grow the server.",
+            description="The server is ready to be bumped right now! Run `.bump` to grow the server.",
             color=discord.Color.green()
         )
         await ctx.send(embed=embed)
+
+@bot.command(name="confess")
+async def cmd_confess(ctx: commands.Context):
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+    
+    class ConfessTriggerView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=60)
+
+        @discord.ui.button(label="Open Confession Form", style=discord.ButtonStyle.danger, emoji="💌")
+        async def trigger_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await interaction.response.send_modal(ConfessionModal())
+
+    try:
+        await ctx.author.send(
+            "💌 Click the button below to open your **100% Anonymous** Confession Form:",
+            view=ConfessTriggerView()
+        )
+        await ctx.send(f"💌 {ctx.author.mention}, I've sent you a DM with your 100% anonymous confession link!", delete_after=6)
+    except Exception:
+        await ctx.send(f"❌ {ctx.author.mention}, I couldn't send you a DM. Please enable DMs to use `.confess`!", delete_after=6)
 
 @bot.command(name="setbirthday", aliases=["setbday"])
 async def cmd_setbirthday(ctx: commands.Context, date_str: str):
@@ -1347,7 +1400,7 @@ async def cmd_botlist(ctx: commands.Context):
             "• `.postcolors` — Spawns the chat color selection dropdown\n"
             "• `.postgender` — Spawns the identity role dropdown\n"
             "• `.posttickets` — Spawns the support ticket launcher\n"
-            "• `.postconfession` — Spawns the anonymous confession form panel"
+            "• `.confesspanel` — Spawns the 100% anonymous confession form panel"
         ),
         inline=False
     )
@@ -1367,11 +1420,12 @@ async def cmd_botlist(ctx: commands.Context):
     embed.add_field(
         name="🎮 Public & Community Features",
         value=(
-            "• `.rank` — Displays user level (capped at 70), total XP, and card\n"
+            "• `.rank` — Displays user level (capped at 70), total XP, and detailed card\n"
             "• `.leaderboard` — Shows top 10 most active members by XP\n"
+            "• `.confess` — Triggers 100% anonymous confession modal via DMs\n"
             "• `.afk [reason]` — Sets AFK status with 10s auto-delete\n"
             "• `.bumptimer` — Checks exact countdown until next bump\n"
-            "• `.bump` — Logs manual server bump and 2-hour reminder timer\n"
+            "• `.bump` — Logs manual server bump (Strict 2-hour lockout enforced)\n"
             "• `.setbirthday <DD-MM>` — Registers birthday for daily announcements\n"
             "• `.birthday [member]` — Checks registered birthday\n"
             "• `.poll <question>` — Dispatches an official server poll"
@@ -1381,7 +1435,7 @@ async def cmd_botlist(ctx: commands.Context):
     embed.add_field(
         name="📦 System & Backup",
         value=(
-            "• `.backup` — Commits snapshot to `#bot-memory` (keeps 3 backups)\n"
+            "• `.backup` — Commits snapshot to `#bot-memory` (keeps 3 backups with bump state)\n"
             "• `.restorebackup` — Synchronizes state from `#bot-memory`\n"
             "• `.removeadminrole` — Migrates legacy Admin holders to Highness"
         ),
@@ -1775,15 +1829,16 @@ async def cmd_posttickets(ctx: commands.Context):
     except (discord.Forbidden, discord.HTTPException):
         pass
 
-@bot.command(name="postconfession")
+@bot.command(name="confesspanel", aliases=["postconfession"])
 @commands.has_permissions(administrator=True)
-async def cmd_postconfession(ctx: commands.Context):
+async def cmd_confesspanel(ctx: commands.Context):
     ch = discord.utils.find(lambda c: "confession" in normalize_text(c.name) and "panel" not in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
     embed = discord.Embed(
         title="💌 Anonymous Confession Portal",
-        description="Click the button below to submit a secure, completely anonymous confession form.\n\n*Your identity is never logged or shown.*",
+        description="Click the button below or type `.confess` to open your 100% anonymous confession form.\n\n*Your identity, username, and ID are never logged, tracked, or shown anywhere.*",
         color=discord.Color.from_rgb(230, 70, 80)
     )
+    embed.set_footer(text="100% Anonymous & Secure")
     await ch.send(embed=embed, view=ConfessionPanelView())
     try:
         await ctx.message.delete()
@@ -1797,7 +1852,17 @@ async def cmd_backup(ctx: commands.Context):
     guild_id = ctx.guild.id
     state = bot.server_state.setdefault(guild_id, default_server_state())
     await save_state_to_memory(ctx.guild, data=state)
-    await status.edit(content="✅ **Server state backup committed successfully (3-backup rolling retention applied).**")
+    
+    bump_ts = state.get("last_bump_time", 0.0)
+    bump_status = f"<t:{int(bump_ts)}:R>" if bump_ts > 0 else "No bumps recorded yet"
+    
+    embed = discord.Embed(
+        title="📦 Backup Committed",
+        description=f"✅ Server state backed up successfully.\n• **Last Bump Tracked:** {bump_status}",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow()
+    )
+    await status.edit(content=None, embed=embed)
 
 @bot.command(name="restorebackup")
 @commands.has_permissions(administrator=True)
@@ -1806,6 +1871,13 @@ async def cmd_restorebackup(ctx: commands.Context):
     data = await load_state_from_memory(ctx.guild)
 
     bot.server_state[ctx.guild.id] = data
+    
+    if data.get("last_bump_time", 0.0) > 0:
+        await schedule_bump_reminder(ctx.guild)
+
+    bump_ts = data.get("last_bump_time", 0.0)
+    bump_status = f"<t:{int(bump_ts)}:R>" if bump_ts > 0 else "None"
+
     embed = discord.Embed(
         title="📦 Memory Backup Synchronized",
         description=(
@@ -1815,6 +1887,7 @@ async def cmd_restorebackup(ctx: commands.Context):
             f"• **Active Warnings Logged:** `{len(data.get('user_warnings', {}))}`\n"
             f"• **Tracked Mutes:** `{len(data.get('user_mute_counts', {}))}`\n"
             f"• **Registered Birthdays:** `{len(data.get('user_birthdays', {}))}`\n"
+            f"• **Last Recorded Bump:** {bump_status}\n"
             f"• **Maintenance Mode:** `{'Active 🔴' if data.get('maintenance_mode', False) else 'Inactive 🟢'}`\n"
             f"• **Active Tickets:** `{len(data.get('tickets', {}))}`"
         ),
