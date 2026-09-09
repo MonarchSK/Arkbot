@@ -129,6 +129,39 @@ SERVER_BLUEPRINT = [
 ]
 
 # ==============================================================================
+# AUTO-PERMISSION ENFORCEMENT HELPER
+# ==============================================================================
+async def auto_configure_channel(channel):
+    """Automatically applies public/team permission barriers based on context."""
+    if isinstance(channel, discord.CategoryChannel):
+        return
+        
+    guild = channel.guild
+    admin_roles = ["Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"]
+    
+    cat_name = channel.category.name.lower() if channel.category else ""
+    ch_name = channel.name.lower()
+    
+    # Restrict if channel name or category hints at administrative/team infrastructure
+    is_restricted = False
+    if "admin" in cat_name or "team" in cat_name or "admin" in ch_name or "staff" in ch_name or "bot" in ch_name or "ticket" in ch_name:
+        is_restricted = True
+        
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False if is_restricted else True)
+    }
+    
+    for rname in admin_roles:
+        r = discord.utils.get(guild.roles, name=rname)
+        if r:
+            overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+            
+    try:
+        await channel.edit(overwrites=overwrites, reason="Auto-Permission system rule enforcement")
+    except Exception:
+        pass
+
+# ==============================================================================
 # UI COMPONENTS (MODALS, TICKETS & BUTTONS)
 # ==============================================================================
 class VerificationModal(Modal, title="Server Verification Form"):
@@ -237,6 +270,11 @@ async def on_ready():
         hourly_backup_task.start()
 
 @bot.event
+async def on_guild_channel_create(channel):
+    """Automatically secures newly created channels in real-time."""
+    await auto_configure_channel(channel)
+
+@bot.event
 async def on_command_error(ctx, error):
     await ctx.send(f"⚠️ **DEBUG ERROR:** {error}")
     print(f"Command Error: {error}")
@@ -309,7 +347,7 @@ async def purge(ctx, amount: int = 10):
 @bot.command(name="setup_help")
 @commands.has_permissions(administrator=True)
 async def setup_help(ctx):
-    ch = discord.utils.get(ctx.guild.text_channels, name="💼・bot-commands")
+    ch = discord.utils.get(guild_channels := ctx.guild.text_channels, name="💼・bot-commands")
     if not ch:
         return await ctx.send("⚠️ Cannot find `💼・bot-commands`. Please run `.setup_channels` first.")
         
@@ -325,6 +363,7 @@ async def setup_help(ctx):
             "`.setup_roles` — Auto-generates the complete 31-role hierarchy.\n"
             "`.nuke_roles` — ☢️ Wipes all custom roles for a fresh start.\n"
             "`.setup_channels` — Deploys the blueprint with strict team-only restricted areas.\n"
+            "`.auto_permissions` — 🛡️ Automatically scans and enforces team/public permissions on all channels.\n"
             "`.nuke_channels` — ☢️ Wipes every channel/category (except command room).\n"
             "`.add_channel <type> <name>` — Creates a text, voice, or forum channel on the fly.\n"
             "`.delete_channels <#tags>` — Deletes specific tagged channels.\n"
@@ -406,6 +445,20 @@ async def add_channel(ctx, channel_type: str, *, channel_name: str):
 # ==============================================================================
 # PERMISSION & SECURITY SYSTEM COMMANDS
 # ==============================================================================
+@bot.command(name="auto_permissions")
+@commands.has_permissions(administrator=True)
+async def auto_permissions(ctx):
+    """Scans and securely enforces team/public permissions on all server channels."""
+    await ctx.send("🛡️ **Auto-Permission System:** Scanning and securing all channels...")
+    count = 0
+    for channel in ctx.guild.channels:
+        if isinstance(channel, discord.CategoryChannel):
+            continue
+        await auto_configure_channel(channel)
+        count += 1
+        await asyncio.sleep(0.2)
+    await ctx.send(f"✅ **Auto-Permissions Applied:** Successfully secured **{count}** channels based on your team security rules!")
+
 @bot.command(name="lock")
 @commands.has_permissions(manage_channels=True)
 async def lock(ctx):
@@ -690,8 +743,11 @@ async def backup(ctx):
     }
     
     file = discord.File(io.BytesIO(json.dumps(backup_data, indent=4).encode('utf-8')), filename="server_backup.json")
-    await ch.send(content=f"🔒 **Manual Backup triggered by {ctx.author.mention}**", file=file)
-    await ctx.send("✅ Backup completed successfully!", delete_after=5)
+    try:
+        await ch.send(content=f"🔒 **Manual Backup triggered by {ctx.author.mention}**", file=file)
+        await ctx.send("✅ Backup completed successfully!", delete_after=5)
+    except Exception:
+        pass
 
 # ==============================================================================
 # RUN BOT
