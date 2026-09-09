@@ -238,7 +238,6 @@ async def on_ready():
 
 @bot.event
 async def on_command_error(ctx, error):
-    # This will print any error directly into your Discord channel to help us debug!
     await ctx.send(f"⚠️ **DEBUG ERROR:** {error}")
     print(f"Command Error: {error}")
 
@@ -315,42 +314,54 @@ async def setup_help(ctx):
         return await ctx.send("⚠️ Cannot find `💼・bot-commands`. Please run `.setup_channels` first.")
         
     embed = discord.Embed(
-        title="🤖 Chill-Verse Bot Command List",
-        description="Here is the complete list of commands available to operate the bot system.",
+        title="🤖 Chill-Verse Master Command List",
+        description="Here is the complete operational suite for managing your server architecture and security.",
         color=discord.Color.purple()
     )
     
     embed.add_field(
-        name="🛠️ Admin Commands", 
+        name="🛠️ Admin & Architecture Commands", 
         value=(
-            "`.setup_roles` — Auto-generates all staff, level, and cosmetic roles.\n"
-            "`.nuke_roles` — ☢️ Wipes ALL custom roles in the server to start fresh.\n"
-            "`.setup_channels` — Deploys the complete blueprint based on your layout.\n"
-            "`.nuke_channels` — ☢️ Wipes EVERY channel/category in the server to start fresh.\n"
-            "`.delete_channels <#tags>` — Deletes multiple specific tagged channels.\n"
-            "`.setup_tickets` — Drops the ticket creation panel in the tickets channel.\n"
-            "`.setup_help` — Posts this exact command list into the channel.\n"
-            "`.backup` — Forces a manual server JSON backup to the errors channel."
+            "`.setup_roles` — Auto-generates the complete 31-role hierarchy.\n"
+            "`.nuke_roles` — ☢️ Wipes all custom roles for a fresh start.\n"
+            "`.setup_channels` — Deploys the blueprint with strict team-only restricted areas.\n"
+            "`.nuke_channels` — ☢️ Wipes every channel/category (except command room).\n"
+            "`.add_channel <type> <name>` — Creates a text, voice, or forum channel on the fly.\n"
+            "`.delete_channels <#tags>` — Deletes specific tagged channels.\n"
+            "`.setup_tickets` — Drops the interactive support ticket panel.\n"
+            "`.setup_help` — Posts this master command sheet.\n"
+            "`.backup` — Forces an immediate server JSON backup."
+        ), 
+        inline=False
+    )
+
+    embed.add_field(
+        name="🔐 Channel Permission & Security Commands", 
+        value=(
+            "`.lock` / `.unlock` — Freezes or unfreezes chat in the current room.\n"
+            "`.hide` / `.show` — Makes the current channel invisible or visible to members.\n"
+            "`.permit <role/user>` — Grants a specific role or user access to a room.\n"
+            "`.revoke <role/user>` — Removes a specific role or user's access from a room.\n"
+            "`.permit_all <role/user>` — Gives a role/user access to *every* channel at once.\n"
+            "`.revoke_all <role/user>` — Locks a role/user out of *every* channel at once.\n"
+            "`.edit_role <role> <permission> <True/False>` — Changes core server powers."
         ), 
         inline=False
     )
     
     embed.add_field(
-        name="🛡️ Moderation Commands", 
-        value="`.purge <number>` — Instantly deletes up to 100 messages in chat.", 
-        inline=False
-    )
-    
-    embed.add_field(
-        name="🌐 General Commands", 
-        value="`.ping` — Checks the bot's latency and server connection.", 
+        name="🛡️ Moderation & General Commands", 
+        value=(
+            "`.purge <number>` — Instantly bulk-deletes up to 100 messages.\n"
+            "`.ping` — Checks bot latency and server gateway connection."
+        ), 
         inline=False
     )
     
     embed.set_footer(text="Chill-Verse System Architecture • Prefix: .")
     
     await ch.send(embed=embed)
-    await ctx.send("✅ Bot command list successfully posted to `💼・bot-commands`!")
+    await ctx.send("✅ Master command sheet successfully updated and posted to `💼・bot-commands`!")
 
 @bot.command(name="setup_tickets")
 @commands.has_permissions(administrator=True)
@@ -367,15 +378,122 @@ async def setup_tickets(ctx):
     await ch.send(embed=embed, view=TicketView())
     await ctx.send("✅ Ticket system deployed to `🎫・tickets`!")
 
+@bot.command(name="add_channel")
+@commands.has_permissions(administrator=True)
+async def add_channel(ctx, channel_type: str, *, channel_name: str):
+    """Creates a new text, voice, or forum channel on the fly."""
+    channel_type = channel_type.lower()
+    category = ctx.channel.category
+    
+    try:
+        if channel_type in ["text", "t"]:
+            new_channel = await ctx.guild.create_text_channel(name=channel_name, category=category)
+            await ctx.send(f"✅ Created text channel {new_channel.mention} in category **{category.name if category else 'None'}**!")
+        elif channel_type in ["voice", "v"]:
+            new_channel = await ctx.guild.create_voice_channel(name=channel_name, category=category)
+            await ctx.send(f"✅ Created voice channel `{new_channel.name}` in category **{category.name if category else 'None'}**!")
+        elif channel_type in ["forum", "f"]:
+            try:
+                new_channel = await ctx.guild.create_forum_channel(name=channel_name, category=category)
+                await ctx.send(f"✅ Created forum channel {new_channel.mention} in category **{category.name if category else 'None'}**!")
+            except Exception:
+                await ctx.send("⚠️ Could not create a forum (ensure Community feature is enabled).")
+        else:
+            await ctx.send("⚠️ Invalid type! Use `text`, `voice`, or `forum`.\n**Example:** `.add_channel text announcements-2`")
+    except Exception as e:
+        await ctx.send(f"⚠️ **Error creating channel:** {e}")
+
+# ==============================================================================
+# PERMISSION & SECURITY SYSTEM COMMANDS
+# ==============================================================================
+@bot.command(name="lock")
+@commands.has_permissions(manage_channels=True)
+async def lock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
+    await ctx.send("🔒 **Channel Locked:** Standard members can no longer send messages here.")
+
+@bot.command(name="unlock")
+@commands.has_permissions(manage_channels=True)
+async def unlock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=None)
+    await ctx.send("🔓 **Channel Unlocked:** Standard members can now send messages here.")
+
+@bot.command(name="hide")
+@commands.has_permissions(manage_channels=True)
+async def hide(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, view_channel=False)
+    await ctx.send("👻 **Channel Hidden:** This channel is now invisible to standard members.")
+
+@bot.command(name="show")
+@commands.has_permissions(manage_channels=True)
+async def show(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, view_channel=True)
+    await ctx.send("👁️ **Channel Visible:** Standard members can now see this channel.")
+
+@bot.command(name="permit")
+@commands.has_permissions(manage_channels=True)
+async def permit(ctx, target: discord.Role | discord.Member):
+    await ctx.channel.set_permissions(target, view_channel=True, send_messages=True, read_message_history=True)
+    await ctx.send(f"✅ **Access Granted:** {target.mention} can now view and type in this channel.")
+
+@bot.command(name="revoke")
+@commands.has_permissions(manage_channels=True)
+async def revoke(ctx, target: discord.Role | discord.Member):
+    await ctx.channel.set_permissions(target, view_channel=False, send_messages=False)
+    await ctx.send(f"❌ **Access Revoked:** {target.mention} has been removed from this channel.")
+
+@bot.command(name="permit_all")
+@commands.has_permissions(administrator=True)
+async def permit_all(ctx, target: discord.Role | discord.Member):
+    await ctx.send(f"🔄 **Global Sync:** Granting {target.mention} access to all channels... Please wait.")
+    count = 0
+    for channel in ctx.guild.channels:
+        try:
+            await channel.set_permissions(target, view_channel=True, send_messages=True, read_message_history=True)
+            count += 1
+            await asyncio.sleep(0.2)
+        except Exception:
+            pass
+    await ctx.send(f"✅ **Global Access Granted:** {target.mention} can now view and type in **{count}** channels!")
+
+@bot.command(name="revoke_all")
+@commands.has_permissions(administrator=True)
+async def revoke_all(ctx, target: discord.Role | discord.Member):
+    await ctx.send(f"🔄 **Global Sync:** Revoking {target.mention}'s access from all channels... Please wait.")
+    count = 0
+    for channel in ctx.guild.channels:
+        try:
+            await channel.set_permissions(target, view_channel=False, send_messages=False)
+            count += 1
+            await asyncio.sleep(0.2)
+        except Exception:
+            pass
+    await ctx.send(f"❌ **Global Access Revoked:** {target.mention} has been completely locked out of **{count}** channels.")
+
+@bot.command(name="edit_role")
+@commands.has_permissions(administrator=True)
+async def edit_role(ctx, role: discord.Role, permission_name: str, value: bool):
+    if role >= ctx.guild.me.top_role:
+        return await ctx.send("⚠️ **Error:** I cannot modify a role higher than my own bot role!")
+    permission_name = permission_name.lower()
+    if not hasattr(discord.Permissions, permission_name):
+        return await ctx.send(f"⚠️ **Error:** `{permission_name}` is not a valid Discord permission name.")
+    perms = role.permissions
+    setattr(perms, permission_name, value)
+    try:
+        await role.edit(permissions=perms, reason=f"Permission changed by {ctx.author}")
+        status = "🟢 ENABLED" if value else "🔴 DISABLED"
+        await ctx.send(f"✅ Successfully updated **{role.name}**!\n{status}: `{permission_name}`")
+    except Exception as e:
+        await ctx.send(f"⚠️ **Error updating role:** {e}")
+
 # ==============================================================================
 # NUKE & REBUILD ROLES
 # ==============================================================================
 @bot.command(name="nuke_roles")
 @commands.has_permissions(administrator=True)
 async def nuke_roles(ctx):
-    """Deletes EVERY custom role in the server to provide a clean slate."""
     await ctx.send("☢️ **ROLE NUKE INITIATED:** Wiping all custom server roles. Please wait...")
-    
     deleted_count = 0
     skipped_count = 0
 
@@ -458,9 +576,7 @@ async def setup_roles(ctx):
 @bot.command(name="nuke_channels")
 @commands.has_permissions(administrator=True)
 async def nuke_channels(ctx):
-    """Deletes EVERY channel and category in the server except the command channel."""
     await ctx.send("☢️ **NUKE INITIATED:** Wiping all other channels and categories. Please wait...")
-    
     deleted_count = 0
     skipped_count = 0
     
@@ -484,7 +600,7 @@ async def setup_channels(ctx):
     guild = ctx.guild
     admin_roles = ["Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"]
 
-    await ctx.send("🏗️ Deploying exact server blueprint... This may take a moment.")
+    await ctx.send("🏗️ Deploying exact server blueprint with strict Team security... Please wait.")
     
     for cat_data in SERVER_BLUEPRINT:
         cat_name = cat_data["category"]
@@ -502,22 +618,19 @@ async def setup_channels(ctx):
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(view_channel=False if is_restricted else True)
             }
-            if is_restricted:
-                for rname in admin_roles:
-                    r = discord.utils.get(guild.roles, name=rname)
-                    if r:
-                        overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+            for rname in admin_roles:
+                r = discord.utils.get(guild.roles, name=rname)
+                if r:
+                    overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
             if ch_type == "text":
                 existing = discord.utils.get(category.text_channels, name=ch_name)
                 if not existing:
                     await guild.create_text_channel(name=ch_name, category=category, overwrites=overwrites)
-            
             elif ch_type == "voice":
                 existing = discord.utils.get(category.voice_channels, name=ch_name)
                 if not existing:
                     await guild.create_voice_channel(name=ch_name, category=category, user_limit=user_lim, overwrites=overwrites)
-            
             elif ch_type == "forum":
                 existing = discord.utils.get(guild.forums, name=ch_name)
                 if not existing:
@@ -540,7 +653,7 @@ async def setup_channels(ctx):
                 memory_overwrites[r] = discord.PermissionOverwrite(view_channel=True, read_message_history=True)
         await guild.create_text_channel(name="bot-memory", overwrites=memory_overwrites, reason="State persistence storage")
 
-    await ctx.send("✅ Chill-Verse custom channels deployed successfully with full staff visibility across restricted spaces!")
+    await ctx.send("✅ Chill-Verse channels deployed successfully! Team has absolute access, while members are restricted to public areas.")
 
 @bot.command(name="delete_channels")
 @commands.has_permissions(administrator=True)
