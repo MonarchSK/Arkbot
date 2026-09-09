@@ -389,7 +389,6 @@ async def save_state_to_memory(guild: discord.Guild, memory_channel_name: str = 
                 file=discord.File(file_bytes, filename=filename)
             )
 
-            # Rolling Retention: Keep strictly the 3 newest backup posts
             backup_messages = []
             async for msg in channel.history(limit=30):
                 if msg.attachments and any(a.filename.endswith(".json") for a in msg.attachments):
@@ -1018,7 +1017,6 @@ async def on_member_join(member: discord.Member):
 
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
-    # Only award boost perks once per transition into booster status
     if not before.premium_since and after.premium_since:
         booster_role = find_role_resilient(after.guild, BOOSTER_ROLE_NAME)
         if booster_role and booster_role not in after.roles and after.guild.me.top_role > booster_role:
@@ -1362,7 +1360,7 @@ async def cmd_botlist(ctx: commands.Context):
             "• `.warn <member> [reason]` — Issues official staff warning\n"
             "• `.warnings <member>` — Views warning and mute record\n"
             "• `.clearwarns <member>` — Clears warnings for a member\n"
-            "• `.purge <amount>` — Clears up to 100 messages"
+            "• `.purge <amount>` — Clears up to 100 messages (Owner, Highness, Authority)"
         ),
         inline=False
     )
@@ -1508,11 +1506,26 @@ async def cmd_timeout(ctx: commands.Context, member: discord.Member, minutes: in
         await ctx.send("❌ Failed to timeout. Check bot permissions and role order.")
 
 @bot.command(name="purge", aliases=["clear"])
-@commands.has_permissions(manage_messages=True)
 async def cmd_purge(ctx: commands.Context, amount: int):
+    is_owner = ctx.author.id == ctx.guild.owner_id
+    allowed_roles = {normalize_text(ADMIN_ROLE_NAME), normalize_text(AUTHORITY_ROLE_NAME)}
+    user_roles = {normalize_text(r.name) for r in ctx.author.roles}
+    
+    if not (is_owner or ctx.author.guild_permissions.administrator or not user_roles.isdisjoint(allowed_roles)):
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        return await ctx.send("❌ This command is restricted to the **Server Owner**, **Admins**, and **Authorities** only.", delete_after=6)
+
     if amount < 1 or amount > 100:
         return await ctx.send("⚠️ Specify an amount between 1 and 100 messages.", delete_after=5)
-    await ctx.message.delete()
+        
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+        
     deleted = await ctx.channel.purge(limit=amount)
     await ctx.send(f"🧹 Purged **{len(deleted)}** message(s).", delete_after=5)
 
