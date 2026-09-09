@@ -13,17 +13,17 @@ import discord
 from discord.ext import commands, tasks
 
 # ==============================================================================
-# 1. SERVER ROLES & PERMISSION MATRIX CONFIGURATION
+# 1. SERVER ROLES & PERMISSION MATRIX CONFIGURATION (NORMAL NAMES)
 # ==============================================================================
 
-ADMIN_ROLE_NAME          = "୨୧ Highness ☕⸝⸝﹗"
-SUPREME_LEADER_ROLE_NAME = "୨ৎ ˖ 𝑺𝒖𝒑𝒓𝒆𝒎𝒆 𝑳𝒆𝒂𝒅𝒆𝒓"
+ADMIN_ROLE_NAME          = "Highness"
+SUPREME_LEADER_ROLE_NAME = "Supreme Leader"
 SUPREME_LEADER_COLOR     = discord.Color.from_rgb(1, 1, 1) # Near-black
-AUTHORITY_ROLE_NAME      = "·.✦Authority✦.·"
-HEAD_MOD_ROLE_NAME       = "✦•┈๑⋅⋯Head Moderator⋯⋅๑┈•✦"
-MOD_ROLE_NAME            = "⋆. 𐙚˚࿔ 𝒎𝒐𝒅𝒆𝒓𝒂𝒕𝒐𝒓 𝜗𝜚˚⋆"
-TRIAL_MOD_ROLE_NAME      = "☆⋆｡Trial mod 𖦹°‧★"
-TEAM_ROLE_NAME           = "𖦹°‧★ ⏜︵   𝒄𝒉𝒊𝒍𝒍-𝒗𝒆𝒓𝒔𝒆 𝒕𝒆𝒂𝒎    ⏜︵ 𖦹°‧★"
+AUTHORITY_ROLE_NAME      = "Authority"
+HEAD_MOD_ROLE_NAME       = "Head Moderator"
+MOD_ROLE_NAME            = "Moderator"
+TRIAL_MOD_ROLE_NAME      = "Trial Mod"
+TEAM_ROLE_NAME           = "Team"
 
 RESTRICTED_ADMIN_ROLES = [
     ADMIN_ROLE_NAME,
@@ -35,34 +35,34 @@ RESTRICTED_ADMIN_ROLES = [
     TEAM_ROLE_NAME
 ]
 
-OG_ROLE_NAME        = "★.  𝓸𝓰  .★  ˚  ✦  .  ⑅  ."
-VETERAN_ROLE_NAME   = "୨ৎ ˖ Veteran"
-BOOSTER_ROLE_NAME   = "꒰ . 𖦹 𝖘𝖊𝖗𝖛𝖊𝖗 𝖇𝖔𝖔𝖘𝖙𝖊𝖗 .ᐟ 𖦹 . ꒱"
-VANITY_ROLE_NAME    = "🗡 ׄ ݊ ݂ Always-in-nasheֹ  ۪ ֹ ᮫"
-BUMP_ROLE_NAME      = "✟ BumpPings"
-POLL_ROLE_NAME      = "✟ PollPings"
+OG_ROLE_NAME        = "OG"
+VETERAN_ROLE_NAME   = "Veteran"
+BOOSTER_ROLE_NAME   = "Server Booster"
+VANITY_ROLE_NAME    = "Vanity"
+BUMP_ROLE_NAME      = "Bump Pings"
+POLL_ROLE_NAME      = "Poll Pings"
 ROBLOX_ROLE_NAME    = "Roblox Members"
 
 GENDER_ROLES = {
-    "Male ★★": discord.Color.blue(),
-    "Female ★★": discord.Color.magenta(),
+    "Male": discord.Color.blue(),
+    "Female": discord.Color.magenta(),
     "Non-Binary": discord.Color.purple()
 }
 
 PRO_HEX_COLORS = {
-    "Pro Hex Yellow": discord.Color.gold(),
-    "Pro Hex Red":    discord.Color.red(),
-    "Pro Hex Pink":   discord.Color.from_rgb(255, 105, 180),
-    "Pro Hex Orange": discord.Color.orange(),
-    "Pro Hex Blue":   discord.Color.blue(),
-    "Pro Hex Green":  discord.Color.green()
+    "Yellow": discord.Color.gold(),
+    "Red":    discord.Color.red(),
+    "Pink":   discord.Color.from_rgb(255, 105, 180),
+    "Orange": discord.Color.orange(),
+    "Blue":   discord.Color.blue(),
+    "Green":  discord.Color.green()
 }
 
 MAX_LEVEL = 70
 
 LEVEL_TIER_ROLES = {
     (1, 9): {
-        "name": "୨୧Newbie୨୧",
+        "name": "Newbie",
         "color": discord.Color.teal(),
         "hoist": False,
         "permissions": discord.Permissions(
@@ -71,7 +71,7 @@ LEVEL_TIER_ROLES = {
         )
     },
     (10, 19): {
-        "name": "୨ৎ ˖Explorer",
+        "name": "Explorer",
         "color": discord.Color.green(),
         "hoist": False,
         "permissions": discord.Permissions(
@@ -92,7 +92,7 @@ LEVEL_TIER_ROLES = {
         )
     },
     (30, 39): {
-        "name": "୨ৎ ˖ Elite",
+        "name": "Elite",
         "color": discord.Color.purple(),
         "hoist": False,
         "permissions": discord.Permissions(
@@ -104,7 +104,7 @@ LEVEL_TIER_ROLES = {
         )
     },
     (40, 49): {
-        "name": "୨ৎ ˖ Champion",
+        "name": "Champion",
         "color": discord.Color.gold(),
         "hoist": False,
         "permissions": discord.Permissions(
@@ -117,7 +117,7 @@ LEVEL_TIER_ROLES = {
         )
     },
     (50, 59): {
-        "name": "୨ৎ ˖ Legend",
+        "name": "Legend",
         "color": discord.Color.orange(),
         "hoist": False,
         "permissions": discord.Permissions(
@@ -131,7 +131,7 @@ LEVEL_TIER_ROLES = {
         )
     },
     (60, 70): {
-        "name": "୨ৎ ˖ Sovereign",
+        "name": "Sovereign",
         "color": discord.Color.dark_red(),
         "hoist": True,
         "permissions": discord.Permissions(
@@ -201,89 +201,89 @@ ROLE_PERMISSIONS_CONFIG = {
 
 EXTENDED_SERVER_BLUEPRINT = [
     {
-        "category": "Admin Area 🔒",
+        "category": "Admin Area",
         "channels": [
-            {"name": "🤖・bot-commands", "type": "text", "scheme": "supreme_admin_only"},
-            {"name": "🛡️・bot-errors",   "type": "text", "scheme": "supreme_admin_only"}
+            {"name": "bot-commands", "type": "text", "scheme": "supreme_admin_only"},
+            {"name": "bot-errors",   "type": "text", "scheme": "supreme_admin_only"}
         ]
     },
     {
-        "category": "Info 🩵",
+        "category": "Info",
         "channels": [
-            {"name": "📢・level-announcements", "type": "text", "scheme": "public_read"},
-            {"name": "🎫・tickets",            "type": "text", "scheme": "public_read"},
-            {"name": "🎨・colours",            "type": "text", "scheme": "public_read"},
-            {"name": "👋・welcome",            "type": "text", "scheme": "public_read"}
+            {"name": "level-announcements", "type": "text", "scheme": "public_read"},
+            {"name": "tickets",            "type": "text", "scheme": "public_read"},
+            {"name": "colours",            "type": "text", "scheme": "public_read"},
+            {"name": "welcome",            "type": "text", "scheme": "public_read"}
         ]
     },
     {
-        "category": "Team <3",
+        "category": "Team",
         "channels": [
-            {"name": "🛡️・team-rules", "type": "text", "scheme": "staff_rules"},
-            {"name": "💬・team-chat",  "type": "text", "scheme": "staff_chat"},
-            {"name": "⏰・bump",       "type": "text", "scheme": "staff_chat"},
-            {"name": "📰・team-news",  "type": "text", "scheme": "staff_news"}
+            {"name": "team-rules", "type": "text", "scheme": "staff_rules"},
+            {"name": "team-chat",  "type": "text", "scheme": "staff_chat"},
+            {"name": "bump",       "type": "text", "scheme": "staff_chat"},
+            {"name": "team-news",  "type": "text", "scheme": "staff_news"}
         ]
     },
     {
-        "category": "Events <3",
+        "category": "Events",
         "channels": [
-            {"name": "🎉・gwys",  "type": "text", "scheme": "public_read"},
-            {"name": "⭐・vouch", "type": "text", "scheme": "public_chat"}
+            {"name": "giveaways", "type": "text", "scheme": "public_read"},
+            {"name": "vouch",     "type": "text", "scheme": "public_chat"}
         ]
     },
     {
-        "category": "Chill Area <3",
+        "category": "Chill Area",
         "channels": [
-            {"name": "☁️・chat",        "type": "text", "scheme": "public_chat"},
-            {"name": "🍸・chat-ai",     "type": "text", "scheme": "public_chat"},
-            {"name": "🪄・chat-en",     "type": "text", "scheme": "public_chat"},
-            {"name": "🐥・discussions", "type": "text", "scheme": "public_chat"}
+            {"name": "chat",        "type": "text", "scheme": "public_chat"},
+            {"name": "chat-ai",     "type": "text", "scheme": "public_chat"},
+            {"name": "chat-en",     "type": "text", "scheme": "public_chat"},
+            {"name": "discussions", "type": "text", "scheme": "public_chat"}
         ]
     },
     {
-        "category": "Media <3",
+        "category": "Media",
         "channels": [
-            {"name": "media-share🦅", "type": "text", "scheme": "public_media"},
-            {"name": "pfp-share🛼",   "type": "text", "scheme": "public_media"},
-            {"name": "selfies🐳",     "type": "text", "scheme": "public_media"}
+            {"name": "media-share", "type": "text", "scheme": "public_media"},
+            {"name": "pfp-share",   "type": "text", "scheme": "public_media"},
+            {"name": "selfies",     "type": "text", "scheme": "public_media"}
         ]
     },
     {
-        "category": "Fun Area <3",
+        "category": "Fun Area",
         "channels": [
-            {"name": "playground-🤼",    "type": "text", "scheme": "public_chat"},
-            {"name": "🚦confession-🖇",  "type": "text", "scheme": "confession_feed"},
-            {"name": "birthdays",       "type": "text", "scheme": "public_chat"},
-            {"name": "memes🤪",          "type": "text", "scheme": "public_media"},
-            {"name": "🖇-daily-polls",   "type": "text", "scheme": "polls_feed"},
-            {"name": "🖇-roblox-elites", "type": "text", "scheme": "roblox_exclusive"}
+            {"name": "playground",  "type": "text", "scheme": "public_chat"},
+            {"name": "confessions", "type": "text", "scheme": "confession_feed"},
+            {"name": "birthdays",   "type": "text", "scheme": "public_chat"},
+            {"name": "memes",       "type": "text", "scheme": "public_media"},
+            {"name": "daily-polls", "type": "text", "scheme": "polls_feed"},
+            {"name": "roblox-elites", "type": "text", "scheme": "roblox_exclusive"}
         ]
     },
     {
-        "category": "Hobbies <3",
+        "category": "Hobbies",
         "channels": [
-            {"name": "shayari-and-poetry💗", "type": "text", "scheme": "public_chat"},
-            {"name": "photography📷",       "type": "text", "scheme": "public_media"},
-            {"name": "arts-and-crafts🎨",    "type": "text", "scheme": "public_media"},
-            {"name": "🎤drop-your-songs",   "type": "text", "scheme": "public_media"}
+            {"name": "poetry",        "type": "text", "scheme": "public_chat"},
+            {"name": "photography",   "type": "text", "scheme": "public_media"},
+            {"name": "arts-and-crafts", "type": "text", "scheme": "public_media"},
+            {"name": "music-drops",   "type": "text", "scheme": "public_media"}
         ]
     },
     {
-        "category": "Voice Chat <3",
+        "category": "Voice Channels",
         "channels": [
-            {"name": "🍕 | chit-chat", "type": "voice", "user_limit": 12, "scheme": "public_voice"},
-            {"name": "🥞 | Duo",       "type": "voice", "user_limit": 2,  "scheme": "public_voice"},
-            {"name": "🍞 | Trio",      "type": "voice", "user_limit": 3,  "scheme": "public_voice"},
-            {"name": "🧀 | squad",     "type": "voice", "user_limit": 4,  "scheme": "public_voice"},
-            {"name": "💽 | Vip",       "type": "voice", "user_limit": 50, "scheme": "vip_voice"}
+            {"name": "Chit-Chat", "type": "voice", "user_limit": 12, "scheme": "public_voice"},
+            {"name": "Duo",       "type": "voice", "user_limit": 2,  "scheme": "public_voice"},
+            {"name": "Trio",      "type": "voice", "user_limit": 3,  "scheme": "public_voice"},
+            {"name": "Squad",     "type": "voice", "user_limit": 4,  "scheme": "public_voice"},
+            {"name": "VIP Lounge", "type": "voice", "user_limit": 50, "scheme": "vip_voice"}
         ]
     },
     {
-        "category": "Music <3",
+        "category": "Music Rooms",
         "channels": [
-            {"name": "🎷-Atom Music", "type": "voice", "user_limit": 0, "scheme": "music_voice"},
-            {"name": "🎵 Hade Music", "type": "voice", "user_limit": 0, "scheme": "music_voice"}
+            {"name": "Music Room 1", "type": "voice", "user_limit": 0, "scheme": "music_voice"},
+            {"name": "Music Room 2", "type": "voice", "user_limit": 0, "scheme": "music_voice"}
         ]
     }
 ]
@@ -549,6 +549,10 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
 
     elif scheme == "supreme_admin_only":
         overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
+        for rname in [AUTHORITY_ROLE_NAME, HEAD_MOD_ROLE_NAME, MOD_ROLE_NAME, TRIAL_MOD_ROLE_NAME, TEAM_ROLE_NAME]:
+            r = find_role_resilient(guild, rname)
+            if r:
+                overwrites[r] = discord.PermissionOverwrite(view_channel=False)
         for role in [admin_role, supreme_role]:
             if role:
                 overwrites[role] = discord.PermissionOverwrite(
@@ -812,8 +816,8 @@ class ColorView(discord.ui.View):
 class GenderSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Male ★★", emoji="👦", description="Select Male identity role"),
-            discord.SelectOption(label="Female ★★", emoji="👧", description="Select Female identity role"),
+            discord.SelectOption(label="Male", emoji="👦", description="Select Male identity role"),
+            discord.SelectOption(label="Female", emoji="👧", description="Select Female identity role"),
             discord.SelectOption(label="Non-Binary", emoji="✨", description="Select Non-Binary identity role"),
             discord.SelectOption(label="Remove Gender Role", emoji="⚪", description="Clear identity roles")
         ]
@@ -916,7 +920,7 @@ class TicketModal(discord.ui.Modal):
 
         category = discord.utils.find(lambda c: "team" in normalize_text(c.name), guild.categories)
         if not category:
-            category = await guild.create_category(name="Team <3", reason="Auto-created missing Team category")
+            category = await guild.create_category(name="Team", reason="Auto-created missing Team category")
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -1113,7 +1117,7 @@ def is_team_channel():
             await ctx.message.delete()
         except Exception:
             pass
-        await ctx.send("❌ This command can only be used inside **`Team <3`** or **`Admin Area`** channels.", delete_after=5)
+        await ctx.send("❌ This command can only be used inside **`Team`** or **`Admin Area`** channels.", delete_after=5)
         return False
     return commands.check(predicate)
 
@@ -1216,7 +1220,7 @@ async def on_ready():
 async def on_member_join(member: discord.Member):
     if member.bot:
         return
-    newbie_role = find_role_resilient(member.guild, "୨୧Newbie୨୧") or await ensure_role_exists(member.guild, "୨୧Newbie୨୧", discord.Color.teal())
+    newbie_role = find_role_resilient(member.guild, "Newbie") or await ensure_role_exists(member.guild, "Newbie", discord.Color.teal())
     if newbie_role and member.guild.me.top_role > newbie_role:
         try:
             await member.add_roles(newbie_role, reason="Auto-assign on onboarding")
@@ -1652,7 +1656,7 @@ async def cmd_botlist(ctx: commands.Context):
         ),
         inline=False
     )
-    embed.set_footer(text="Restricted exclusively to Team <3 / Admin channels.")
+    embed.set_footer(text="Restricted exclusively to Team / Admin channels.")
     await ctx.send(embed=embed)
 
 # ==============================================================================
@@ -1883,7 +1887,7 @@ async def cmd_resetroles(ctx: commands.Context):
         managed_names.add(normalize_text(c_name))
     for g_name in GENDER_ROLES:
         managed_names.add(normalize_text(g_name))
-    for m_name in [OG_ROLE_NAME, VETERAN_ROLE_NAME, BOOSTER_ROLE_NAME, VANITY_ROLE_NAME, BUMP_ROLE_NAME, POLL_ROLE_NAME, ROBLOX_ROLE_NAME, "୨୧Newbie୨୧"]:
+    for m_name in [OG_ROLE_NAME, VETERAN_ROLE_NAME, BOOSTER_ROLE_NAME, VANITY_ROLE_NAME, BUMP_ROLE_NAME, POLL_ROLE_NAME, ROBLOX_ROLE_NAME, "Newbie"]:
         managed_names.add(normalize_text(m_name))
 
     deleted_count = 0
@@ -2019,7 +2023,7 @@ async def cmd_postgender(ctx: commands.Context):
         description="Select your gender identity from the dropdown below to update your profile role.",
         color=discord.Color.purple()
     )
-    await ctx.send(embed=embed, view=GenderView())
+    await ch.send(embed=embed, view=GenderView())
     try:
         await ctx.message.delete()
     except Exception:
@@ -2050,7 +2054,7 @@ async def cmd_posttickets(ctx: commands.Context):
 @bot.command(name="confesspanel", aliases=["postconfession"])
 @commands.has_permissions(administrator=True)
 async def cmd_confesspanel(ctx: commands.Context):
-    ch = discord.utils.find(lambda c: "confession" in normalize_text(c.name) and "panel" not in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
+    ch = discord.utils.find(lambda c: "confessions" in normalize_text(c.name) and "panel" not in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
     embed = discord.Embed(
         title="💌 Anonymous Confession Portal",
         description="Click the button below or type `.confess` to open your 100% anonymous confession form.\n\n*Your identity, username, and ID are never logged, tracked, or shown anywhere.*",
@@ -2124,4 +2128,3 @@ if __name__ == "__main__":
         print("❌ CRITICAL: DISCORD_TOKEN environment variable is not set!")
     else:
         bot.run(TOKEN)
-        
