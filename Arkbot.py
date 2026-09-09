@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import os
 import re
@@ -187,93 +188,6 @@ ROLE_PERMISSIONS_CONFIG = {
     }
 }
 
-# ==============================================================================
-# 2. SERVER CHANNEL BLUEPRINT & MIGRATION SCHEMES
-# ==============================================================================
-
-EXTENDED_SERVER_BLUEPRINT = [
-    {
-        "category": "Info 🩵",
-        "channels": [
-            {"name": "📢・level-announcements", "type": "text", "scheme": "public_read"},
-            {"name": "🎫・tickets",            "type": "text", "scheme": "public_read"},
-            {"name": "🎨・colours",            "type": "text", "scheme": "public_read"}
-        ]
-    },
-    {
-        "category": "Team <3",
-        "channels": [
-            {"name": "🛡️・team-rules", "type": "text", "scheme": "staff_rules"},
-            {"name": "💬・team-chat",  "type": "text", "scheme": "staff_chat"},
-            {"name": "⏰・bump",       "type": "text", "scheme": "staff_chat"},
-            {"name": "📰・team-news",  "type": "text", "scheme": "staff_news"}
-        ]
-    },
-    {
-        "category": "Events <3",
-        "channels": [
-            {"name": "🎉・gwys",  "type": "text", "scheme": "public_read"},
-            {"name": "⭐・vouch", "type": "text", "scheme": "public_chat"}
-        ]
-    },
-    {
-        "category": "Chill Area <3",
-        "channels": [
-            {"name": "☁️・chat",        "type": "text", "scheme": "public_chat"},
-            {"name": "🍸・chat-ai",     "type": "text", "scheme": "public_chat"},
-            {"name": "🪄・chat-en",     "type": "text", "scheme": "public_chat"},
-            {"name": "🐥・discussions", "type": "text", "scheme": "public_chat"}
-        ]
-    },
-    {
-        "category": "Media <3",
-        "channels": [
-            {"name": "media-share🦅", "type": "text", "scheme": "public_media"},
-            {"name": "pfp-share🛼",   "type": "text", "scheme": "public_media"},
-            {"name": "selfies🐳",     "type": "text", "scheme": "public_media"}
-        ]
-    },
-    {
-        "category": "Fun Area <3",
-        "channels": [
-            {"name": "playground-🤼",    "type": "text", "scheme": "public_chat"},
-            {"name": "🚦confession-🖇",  "type": "text", "scheme": "confession_feed"},
-            {"name": "birthdays",       "type": "text", "scheme": "public_chat"},
-            {"name": "memes🤪",          "type": "text", "scheme": "public_media"},
-            {"name": "🖇-daily-polls",   "type": "text", "scheme": "polls_feed"},
-            {"name": "🖇-roblox-elites", "type": "text", "scheme": "roblox_exclusive"}
-        ]
-    },
-    {
-        "category": "Hobbies <3",
-        "channels": [
-            {"name": "shayari-and-poetry💗", "type": "text", "scheme": "public_chat"},
-            {"name": "photography📷",       "type": "text", "scheme": "public_media"},
-            {"name": "arts-and-crafts🎨",    "type": "text", "scheme": "public_media"},
-            {"name": "🎤drop-your-songs",   "type": "text", "scheme": "public_media"}
-        ]
-    },
-    {
-        "category": "Voice Chat <3",
-        "channels": [
-            {"name": "🍕 | chit-chat", "type": "voice", "user_limit": 12, "scheme": "public_voice"},
-            {"name": "🥞 | Duo",       "type": "voice", "user_limit": 2,  "scheme": "public_voice"},
-            {"name": "🍞 | Trio",      "type": "voice", "user_limit": 3,  "scheme": "public_voice"},
-            {"name": "🧀 | squad",     "type": "voice", "user_limit": 4,  "scheme": "public_voice"},
-            {"name": "💽 | Vip",       "type": "voice", "user_limit": 50, "scheme": "vip_voice"}
-        ]
-    },
-    {
-        "category": "Music <3",
-        "channels": [
-            {"name": "🎷-Atom Music", "type": "voice", "user_limit": 0, "scheme": "music_voice"},
-            {"name": "🎵 Hade Music", "type": "voice", "user_limit": 0, "scheme": "music_voice"}
-        ]
-    }
-]
-
-CRITICAL_PROTECTED_CHANNELS = ["bot-memory", "bot_memory", "backup", "audit-log"]
-
 LEGACY_ROLE_MIGRATION = {
     "admin": ADMIN_ROLE_NAME,
     "authority": AUTHORITY_ROLE_NAME,
@@ -299,7 +213,7 @@ LEGACY_ROLE_MIGRATION = {
 }
 
 # ==============================================================================
-# 3. TEXT NORMALIZATION & RESILIENT HELPERS
+# 2. TEXT NORMALIZATION & RESILIENT HELPERS
 # ==============================================================================
 
 def normalize_text(text: str) -> str:
@@ -343,7 +257,7 @@ async def ensure_role_exists(
     return role
 
 # ==============================================================================
-# 4. MEMORY STORAGE & SAFE BACKUP ENGINE (#bot-memory)
+# 3. MEMORY STORAGE & SAFE BACKUP ENGINE (#bot-memory)
 # ==============================================================================
 
 memory_lock = asyncio.Lock()
@@ -400,11 +314,16 @@ async def save_state_to_memory(guild: discord.Guild, memory_channel_name: str = 
                 return
 
         raw_json = json.dumps(data or {}, cls=MemoryEncoder, indent=2)
-        chunks = [raw_json[i:i + 1950] for i in range(0, len(raw_json), 1950)]
+        file_bytes = io.BytesIO(raw_json.encode('utf-8'))
+        filename = f"backup_{guild.id}.json"
+        
         try:
             await channel.purge(limit=15)
-            for chunk in chunks:
-                await channel.send(f"```json\n{chunk}\n```")
+            timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            await channel.send(
+                content=f"💾 **[DATABASE STATE SYNC]** `{timestamp_str}`",
+                file=discord.File(file_bytes, filename=filename)
+            )
         except (discord.Forbidden, discord.HTTPException):
             pass
 
@@ -413,111 +332,31 @@ async def load_state_from_memory(guild: discord.Guild, memory_channel_name: str 
     if not channel:
         return {}
 
-    raw_chunks = []
-    async for message in channel.history(limit=50, oldest_first=True):
+    async for message in channel.history(limit=20):
+        if message.attachments:
+            for att in message.attachments:
+                if att.filename.endswith(".json"):
+                    try:
+                        file_bytes = await att.read()
+                        raw_data = json.loads(file_bytes.decode('utf-8'), object_hook=robust_memory_decoder)
+                        return migrate_legacy_state_payload(raw_data)
+                    except Exception:
+                        continue
+        
         content = message.content.strip()
-        if not content:
-            continue
-        clean_chunk = re.sub(r"^```(?:json)?\n?", "", content, flags=re.IGNORECASE)
-        clean_chunk = re.sub(r"\n?```$", "", clean_chunk)
-        raw_chunks.append(clean_chunk)
-
-    if not raw_chunks:
-        return {}
-
-    try:
-        raw_data = json.loads("".join(raw_chunks), object_hook=robust_memory_decoder)
-        return migrate_legacy_state_payload(raw_data)
-    except json.JSONDecodeError:
-        for chunk in reversed(raw_chunks):
+        if content.startswith("```"):
+            clean_chunk = re.sub(r"^```(?:json)?\n?", "", content, flags=re.IGNORECASE)
+            clean_chunk = re.sub(r"\n?```$", "", clean_chunk)
             try:
-                raw_data = json.loads(chunk, object_hook=robust_memory_decoder)
+                raw_data = json.loads(clean_chunk, object_hook=robust_memory_decoder)
                 return migrate_legacy_state_payload(raw_data)
             except json.JSONDecodeError:
                 continue
+
     return {}
 
 # ==============================================================================
-# 5. PERMISSION OVERWRITE ROUTER
-# ==============================================================================
-
-def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, discord.PermissionOverwrite]:
-    staff_roles = [find_role_resilient(guild, r) for r in RESTRICTED_ADMIN_ROLES]
-    active_staff = [r for r in staff_roles if r]
-    admin_role = find_role_resilient(guild, ADMIN_ROLE_NAME)
-    roblox_role = find_role_resilient(guild, ROBLOX_ROLE_NAME)
-
-    overwrites = {
-        guild.default_role: discord.PermissionOverwrite(),
-        guild.me: discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, manage_channels=True,
-            manage_permissions=True, embed_links=True, attach_files=True
-        )
-    }
-
-    if scheme == "public_chat":
-        overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, read_message_history=True, add_reactions=True
-        )
-    elif scheme == "public_media":
-        overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, read_message_history=True,
-            attach_files=True, embed_links=True, add_reactions=True
-        )
-    elif scheme in ["public_read", "polls_feed", "confession_feed"]:
-        overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, send_messages=False, read_message_history=True, add_reactions=True
-        )
-        for role in active_staff:
-            overwrites[role] = discord.PermissionOverwrite(send_messages=True)
-    elif scheme == "roblox_exclusive":
-        overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
-        if roblox_role:
-            overwrites[roblox_role] = discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, read_message_history=True,
-                attach_files=True, embed_links=True
-            )
-        for role in active_staff:
-            overwrites[role] = discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, read_message_history=True
-            )
-    elif scheme == "public_voice":
-        overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, connect=True, speak=True, stream=True
-        )
-    elif scheme == "vip_voice":
-        overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, connect=True, speak=True, stream=True
-        )
-        if admin_role:
-            overwrites[admin_role] = discord.PermissionOverwrite(
-                priority_speaker=True, move_members=True, mute_members=True
-            )
-    elif scheme == "music_voice":
-        overwrites[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, connect=True, speak=True, stream=False, use_soundboard=False
-        )
-    elif scheme == "staff_chat":
-        overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
-        for role in active_staff:
-            overwrites[role] = discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, read_message_history=True,
-                attach_files=True, embed_links=True
-            )
-    elif scheme in ["staff_rules", "staff_news"]:
-        overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
-        for role in active_staff:
-            overwrites[role] = discord.PermissionOverwrite(
-                view_channel=True, send_messages=False, read_message_history=True, add_reactions=True
-            )
-        if admin_role:
-            overwrites[admin_role] = discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, manage_messages=True
-            )
-    return overwrites
-
-# ==============================================================================
-# 6. PROGRESSION ENGINE (LEVELS & TENURE)
+# 4. PROGRESSION ENGINE (LEVELS & TENURE)
 # ==============================================================================
 
 xp_cooldowns: Dict[int, float] = {}
@@ -627,7 +466,7 @@ async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool =
         await save_state_to_memory(guild, data=bot.server_state[guild_id])
 
 # ==============================================================================
-# 7. INTERACTIVE PERSISTENT UI VIEWS
+# 5. INTERACTIVE PERSISTENT UI VIEWS
 # ==============================================================================
 
 class CommunityRolesView(discord.ui.View):
@@ -795,7 +634,7 @@ class TicketLaunchView(discord.ui.View):
             await interaction.followup.send("❌ Could not create ticket channel.", ephemeral=True)
 
 # ==============================================================================
-# 8. BOT CLIENT & PERMISSION HELPERS
+# 6. BOT CLIENT & PERMISSION HELPERS
 # ==============================================================================
 
 class ChillVerseBot(commands.Bot):
@@ -855,7 +694,7 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
         pass
 
 # ==============================================================================
-# 9. LISTENERS (AFK, BUMP, BOOSTS, EXP, AUTO-REACTIONS, THREADS)
+# 7. LISTENERS (AFK, BUMP, BOOSTS, EXP, AUTO-REACTIONS, THREADS)
 # ==============================================================================
 
 @bot.event
@@ -899,7 +738,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
             embed = discord.Embed(
                 title="✨ Server Boost Received! 🚀",
                 description=f"Thank you {after.mention} for boosting **{after.guild.name}**!\n• Equipped `{BOOSTER_ROLE_NAME}`\n• Received **+1,500 XP**",
-                color=discord.Color.nitro_pink(),
+                color=discord.Color.from_rgb(255, 105, 180),
                 timestamp=discord.utils.utcnow()
             )
             embed.set_thumbnail(url=after.display_avatar.url)
@@ -964,7 +803,7 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 # ==============================================================================
-# 10. SYSTEM & USER COMMANDS
+# 8. SYSTEM & USER COMMANDS
 # ==============================================================================
 
 async def bump_reminder_task(guild: discord.Guild, channel: discord.TextChannel):
@@ -1120,9 +959,9 @@ async def cmd_botlist(ctx: commands.Context):
     embed.add_field(
         name="🏗️ Setup & Infrastructure",
         value=(
-            "• `.setup_channels` — Deploys stylized architecture & purges legacy channels\n"
             "• `.syncperms` — Enforces staff and tier permission matrices\n"
-            "• `.autorole_setup` — Provisions all server roles and cosmetic tiers"
+            "• `.autorole_setup` — Provisions all server roles and cosmetic tiers\n"
+            "• `.resetroles` — Wipes and re-provisions all managed server roles"
         ),
         inline=False
     )
@@ -1171,7 +1010,7 @@ async def cmd_botlist(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 # ==============================================================================
-# 11. MODERATION SUITE
+# 9. MODERATION SUITE
 # ==============================================================================
 
 @bot.command(name="kick")
@@ -1224,7 +1063,7 @@ async def cmd_purge(ctx: commands.Context, amount: int):
     await ctx.send(f"🧹 Purged **{len(deleted)}** message(s).", delete_after=5)
 
 # ==============================================================================
-# 12. DEPLOYMENT, PERMISSION SYNC & MIGRATION
+# 10. DEPLOYMENT, PERMISSION SYNC, ROLE RESET & MIGRATION
 # ==============================================================================
 
 @bot.command(name="syncperms")
@@ -1301,7 +1140,7 @@ async def cmd_autorole_setup(ctx: commands.Context):
 
     await ensure_role_exists(guild, OG_ROLE_NAME, discord.Color.dark_magenta())
     await ensure_role_exists(guild, VETERAN_ROLE_NAME, discord.Color.purple())
-    await ensure_role_exists(guild, BOOSTER_ROLE_NAME, discord.Color.nitro_pink())
+    await ensure_role_exists(guild, BOOSTER_ROLE_NAME, discord.Color.from_rgb(255, 105, 180))
     await ensure_role_exists(guild, VANITY_ROLE_NAME, discord.Color.from_rgb(120, 100, 180))
     await ensure_role_exists(guild, BUMP_ROLE_NAME, discord.Color.gold(), mentionable=True)
     await ensure_role_exists(guild, POLL_ROLE_NAME, discord.Color.red(), mentionable=True)
@@ -1309,82 +1148,52 @@ async def cmd_autorole_setup(ctx: commands.Context):
 
     await msg.edit(content="✅ **All server roles, staff permissions, and cosmetics successfully initialized!**")
 
-@bot.command(name="setup_channels")
+@bot.command(name="resetroles")
 @commands.has_permissions(administrator=True)
-async def cmd_setup_channels(ctx: commands.Context):
+async def cmd_resetroles(ctx: commands.Context):
     guild = ctx.guild
-    status = await ctx.send("⏳ **Step 1/3: Deploying new stylized architecture & channel locks...**")
+    msg = await ctx.send("⏳ **Wiping all bot-managed roles and re-adding them...**")
 
-    preserved_channels = set()
-    preserved_categories = set()
-    created, synced, purged = 0, 0, 0
+    managed_names = set()
+    for rname in ROLE_PERMISSIONS_CONFIG:
+        managed_names.add(normalize_text(rname))
+    for cfg in LEVEL_TIER_ROLES.values():
+        managed_names.add(normalize_text(cfg["name"]))
+    for c_name in PRO_HEX_COLORS:
+        managed_names.add(normalize_text(c_name))
+    for g_name in GENDER_ROLES:
+        managed_names.add(normalize_text(g_name))
+    for m_name in [OG_ROLE_NAME, VETERAN_ROLE_NAME, BOOSTER_ROLE_NAME, VANITY_ROLE_NAME, BUMP_ROLE_NAME, POLL_ROLE_NAME, ROBLOX_ROLE_NAME, "୨୧Newbie୨୧"]:
+        managed_names.add(normalize_text(m_name))
 
-    for cat_data in EXTENDED_SERVER_BLUEPRINT:
-        cat_name = cat_data["category"]
-        category = discord.utils.find(lambda c: normalize_text(c.name) == normalize_text(cat_name), guild.categories)
-        if not category:
-            category = await guild.create_category(name=cat_name, reason="Blueprint Category Init")
-            await asyncio.sleep(0.35)
-        preserved_categories.add(category.id)
-
-        for ch in cat_data["channels"]:
-            ch_name, ch_type, scheme = ch["name"], ch["type"], ch["scheme"]
-            user_lim = ch.get("user_limit", 0)
-            overwrites = generate_channel_overwrites(guild, scheme)
-
-            target_list = guild.text_channels if ch_type == "text" else guild.voice_channels
-            channel = discord.utils.find(lambda c: c.name == ch_name and c.category_id == category.id, target_list)
-
-            if not channel:
-                if ch_type == "text":
-                    channel = await guild.create_text_channel(name=ch_name, category=category, overwrites=overwrites)
-                else:
-                    channel = await guild.create_voice_channel(name=ch_name, category=category, user_limit=user_lim, overwrites=overwrites)
-                created += 1
-                await asyncio.sleep(0.35)
-            else:
-                for target, ow in overwrites.items():
-                    await channel.set_permissions(target, overwrite=ow)
-                if ch_type == "voice" and channel.user_limit != user_lim:
-                    await channel.edit(user_limit=user_lim)
-                synced += 1
-                await asyncio.sleep(0.35)
-
-            if channel:
-                preserved_channels.add(channel.id)
-
-    await status.edit(content="⏳ **Step 2/3: Purging legacy and duplicate channels...**")
-    blueprint_slugs = {clean_slug(ch["name"]) for cat in EXTENDED_SERVER_BLUEPRINT for ch in cat["channels"]}
-    for ch in list(guild.text_channels) + list(guild.voice_channels):
-        if ch.id in preserved_channels:
-            continue
-        if any(p in ch.name.lower() for p in CRITICAL_PROTECTED_CHANNELS) or ch.name.lower().startswith("ticket-"):
-            continue
-
-        if clean_slug(ch.name) in blueprint_slugs or (ch.category and ch.category.id in preserved_categories):
+    deleted_count = 0
+    for role in guild.roles:
+        if normalize_text(role.name) in managed_names and guild.me.top_role > role and role != guild.default_role:
             try:
-                await ch.delete(reason="Purged legacy channel replaced by blueprint")
-                purged += 1
-                await asyncio.sleep(0.5)
-            except (discord.Forbidden, discord.HTTPException):
+                await role.delete(reason="Role reset command executed")
+                deleted_count += 1
+                await asyncio.sleep(0.3)
+            except Exception:
                 pass
 
-    await status.edit(content="⏳ **Step 3/3: Cleaning up empty categories...**")
-    for cat in guild.categories:
-        if cat.id not in preserved_categories and len(cat.channels) == 0:
-            try:
-                await cat.delete(reason="Purged empty category")
-                await asyncio.sleep(0.35)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
+    for rname, cfg in ROLE_PERMISSIONS_CONFIG.items():
+        await ensure_role_exists(guild, rname, cfg["color"], cfg["permissions"], cfg["hoist"])
+    for (low, high), cfg in LEVEL_TIER_ROLES.items():
+        await ensure_role_exists(guild, cfg["name"], cfg["color"], cfg["permissions"], cfg["hoist"])
+    for c_name, c_color in PRO_HEX_COLORS.items():
+        await ensure_role_exists(guild, c_name, c_color)
+    for g_name, g_color in GENDER_ROLES.items():
+        await ensure_role_exists(guild, g_name, g_color)
 
-    embed = discord.Embed(
-        title="🧹 Channel Replacement Complete",
-        description=f"• **New Channels Deployed:** `{created}`\n• **Permissions Synchronized:** `{synced}`\n• **Legacy Channels Purged:** `{purged}`",
-        color=discord.Color.green(),
-        timestamp=discord.utils.utcnow()
-    )
-    await status.edit(content=None, embed=embed)
+    await ensure_role_exists(guild, OG_ROLE_NAME, discord.Color.dark_magenta())
+    await ensure_role_exists(guild, VETERAN_ROLE_NAME, discord.Color.purple())
+    await ensure_role_exists(guild, BOOSTER_ROLE_NAME, discord.Color.from_rgb(255, 105, 180))
+    await ensure_role_exists(guild, VANITY_ROLE_NAME, discord.Color.from_rgb(120, 100, 180))
+    await ensure_role_exists(guild, BUMP_ROLE_NAME, discord.Color.gold(), mentionable=True)
+    await ensure_role_exists(guild, POLL_ROLE_NAME, discord.Color.red(), mentionable=True)
+    await ensure_role_exists(guild, ROBLOX_ROLE_NAME, discord.Color.blue())
+
+    await msg.edit(content=f"✅ **Reset complete! Deleted `{deleted_count}` old roles and re-added all server roles fresh.**")
 
 @bot.command(name="removeadminrole")
 @commands.has_permissions(administrator=True)
@@ -1502,7 +1311,7 @@ async def cmd_restorebackup(ctx: commands.Context):
     await status.edit(content=None, embed=embed)
 
 # ==============================================================================
-# 13. APPLICATION ENTRY POINT
+# 11. APPLICATION ENTRY POINT
 # ==============================================================================
 
 if __name__ == "__main__":
