@@ -129,10 +129,10 @@ SERVER_BLUEPRINT = [
 ]
 
 # ==============================================================================
-# AUTO-PERMISSION ENFORCEMENT HELPER
+# AUTO-PERMISSION & ABSOLUTE TEAM ACCESS ENFORCEMENT
 # ==============================================================================
 async def auto_configure_channel(channel):
-    """Automatically applies public/team permission barriers based on context."""
+    """Ensures Team roles are explicitly added to ALL channels, while members/everyone are restricted to public channels."""
     if isinstance(channel, discord.CategoryChannel):
         return
         
@@ -142,22 +142,24 @@ async def auto_configure_channel(channel):
     cat_name = channel.category.name.lower() if channel.category else ""
     ch_name = channel.name.lower()
     
-    # Restrict if channel name or category hints at administrative/team infrastructure
+    # Determine if the channel is restricted from general members
     is_restricted = False
     if "admin" in cat_name or "team" in cat_name or "admin" in ch_name or "staff" in ch_name or "bot" in ch_name or "ticket" in ch_name:
         is_restricted = True
         
+    # Set public/restricted access for standard members & @everyone
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False if is_restricted else True)
     }
     
+    # EXPLICITLY add every Team role to EVERY channel in the server
     for rname in admin_roles:
         r = discord.utils.get(guild.roles, name=rname)
         if r:
             overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
             
     try:
-        await channel.edit(overwrites=overwrites, reason="Auto-Permission system rule enforcement")
+        await channel.edit(overwrites=overwrites, reason="Ironclad Team Access & Public Member Restriction Sync")
     except Exception:
         pass
 
@@ -347,7 +349,7 @@ async def purge(ctx, amount: int = 10):
 @bot.command(name="setup_help")
 @commands.has_permissions(administrator=True)
 async def setup_help(ctx):
-    ch = discord.utils.get(guild_channels := ctx.guild.text_channels, name="💼・bot-commands")
+    ch = discord.utils.get(ctx.guild.text_channels, name="💼・bot-commands")
     if not ch:
         return await ctx.send("⚠️ Cannot find `💼・bot-commands`. Please run `.setup_channels` first.")
         
@@ -362,8 +364,8 @@ async def setup_help(ctx):
         value=(
             "`.setup_roles` — Auto-generates the complete 31-role hierarchy.\n"
             "`.nuke_roles` — ☢️ Wipes all custom roles for a fresh start.\n"
-            "`.setup_channels` — Deploys the blueprint with strict team-only restricted areas.\n"
-            "`.auto_permissions` — 🛡️ Automatically scans and enforces team/public permissions on all channels.\n"
+            "`.setup_channels` — Deploys the blueprint with absolute team access & public restrictions.\n"
+            "`.sync_and_permit` — 🛡️ Syncs auto-permissions and explicitly grants a role access to all channels.\n"
             "`.nuke_channels` — ☢️ Wipes every channel/category (except command room).\n"
             "`.add_channel <type> <name>` — Creates a text, voice, or forum channel on the fly.\n"
             "`.delete_channels <#tags>` — Deletes specific tagged channels.\n"
@@ -445,19 +447,26 @@ async def add_channel(ctx, channel_type: str, *, channel_name: str):
 # ==============================================================================
 # PERMISSION & SECURITY SYSTEM COMMANDS
 # ==============================================================================
-@bot.command(name="auto_permissions")
+@bot.command(name="sync_and_permit")
 @commands.has_permissions(administrator=True)
-async def auto_permissions(ctx):
-    """Scans and securely enforces team/public permissions on all server channels."""
-    await ctx.send("🛡️ **Auto-Permission System:** Scanning and securing all channels...")
+async def sync_and_permit(ctx, target: discord.Role):
+    """Auto-syncs channel security and explicitly grants a specified role access to all channels."""
+    await ctx.send(f"🔄 **Master Sync:** Enforcing team access rules and granting {target.mention} access to all channels...")
     count = 0
+    
     for channel in ctx.guild.channels:
         if isinstance(channel, discord.CategoryChannel):
             continue
         await auto_configure_channel(channel)
-        count += 1
-        await asyncio.sleep(0.2)
-    await ctx.send(f"✅ **Auto-Permissions Applied:** Successfully secured **{count}** channels based on your team security rules!")
+        
+        try:
+            await channel.set_permissions(target, view_channel=True, send_messages=True, read_message_history=True)
+            count += 1
+            await asyncio.sleep(0.2)
+        except Exception:
+            pass
+            
+    await ctx.send(f"✅ **Master Sync Complete:** Channels secured for members, and {target.mention} explicitly granted access to **{count}** channels!")
 
 @bot.command(name="lock")
 @commands.has_permissions(manage_channels=True)
@@ -653,7 +662,7 @@ async def setup_channels(ctx):
     guild = ctx.guild
     admin_roles = ["Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"]
 
-    await ctx.send("🏗️ Deploying exact server blueprint with strict Team security... Please wait.")
+    await ctx.send("🏗️ Deploying server blueprint with absolute Team access and public member restrictions...")
     
     for cat_data in SERVER_BLUEPRINT:
         cat_name = cat_data["category"]
@@ -706,7 +715,7 @@ async def setup_channels(ctx):
                 memory_overwrites[r] = discord.PermissionOverwrite(view_channel=True, read_message_history=True)
         await guild.create_text_channel(name="bot-memory", overwrites=memory_overwrites, reason="State persistence storage")
 
-    await ctx.send("✅ Chill-Verse channels deployed successfully! Team has absolute access, while members are restricted to public areas.")
+    await ctx.send("✅ Chill-Verse channels deployed successfully! Team has access to every channel, while members/everyone are restricted to public areas.")
 
 @bot.command(name="delete_channels")
 @commands.has_permissions(administrator=True)
