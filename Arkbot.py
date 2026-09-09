@@ -841,6 +841,19 @@ def is_team_channel():
         return False
     return commands.check(predicate)
 
+@bot.event
+async def on_command_error(ctx: commands.Context, error: commands.CommandError):
+    """Global error handler so command errors print in console and chat instead of failing silently."""
+    if isinstance(error, commands.CheckFailure):
+        return  # Handled by check decorators
+    if isinstance(error, commands.CommandNotFound):
+        return  # Ignore unrecognized commands
+    print(f"❌ Command Error [{ctx.command}]: {error}")
+    try:
+        await ctx.send(f"⚠️ Error executing command: `{error}`", delete_after=10)
+    except Exception:
+        pass
+
 # ==============================================================================
 # 9. LISTENERS (AFK, BUMP, BOOSTS, EXP, AUTO-REACTIONS, THREADS)
 # ==============================================================================
