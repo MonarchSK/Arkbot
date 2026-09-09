@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 import time
 import unicodedata
@@ -843,11 +844,10 @@ def is_team_channel():
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: commands.CommandError):
-    """Global error handler so command errors print in console and chat instead of failing silently."""
     if isinstance(error, commands.CheckFailure):
-        return  # Handled by check decorators
+        return
     if isinstance(error, commands.CommandNotFound):
-        return  # Ignore unrecognized commands
+        return
     print(f"❌ Command Error [{ctx.command}]: {error}")
     try:
         await ctx.send(f"⚠️ Error executing command: `{error}`", delete_after=10)
@@ -1506,5 +1506,8 @@ async def cmd_restorebackup(ctx: commands.Context):
 # ==============================================================================
 
 if __name__ == "__main__":
-    TOKEN = "YOUR_BOT_TOKEN_HERE"
-    bot.run(TOKEN)
+    TOKEN = os.getenv("DISCORD_TOKEN")
+    if not TOKEN:
+        print("❌ CRITICAL: DISCORD_TOKEN environment variable is not set!")
+    else:
+        bot.run(TOKEN)
