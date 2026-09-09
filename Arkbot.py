@@ -13,7 +13,7 @@ import discord
 from discord.ext import commands, tasks
 
 # ==============================================================================
-# 1. SERVER ROLES & PERMISSION MATRIX CONFIGURATION (NORMAL NAMES)
+# 1. SERVER ROLES & PERMISSION MATRIX CONFIGURATION (NORMAL NAMES, ORIGINAL CHANNELS)
 # ==============================================================================
 
 ADMIN_ROLE_NAME          = "Highness"
@@ -201,89 +201,89 @@ ROLE_PERMISSIONS_CONFIG = {
 
 EXTENDED_SERVER_BLUEPRINT = [
     {
-        "category": "Admin Area",
+        "category": "Admin Area 🔒",
         "channels": [
-            {"name": "bot-commands", "type": "text", "scheme": "supreme_admin_only"},
-            {"name": "bot-errors",   "type": "text", "scheme": "supreme_admin_only"}
+            {"name": "🤖・bot-commands", "type": "text", "scheme": "supreme_admin_only"},
+            {"name": "🛡️・bot-errors",   "type": "text", "scheme": "supreme_admin_only"}
         ]
     },
     {
-        "category": "Info",
+        "category": "Info 🩵",
         "channels": [
-            {"name": "level-announcements", "type": "text", "scheme": "public_read"},
-            {"name": "tickets",            "type": "text", "scheme": "public_read"},
-            {"name": "colours",            "type": "text", "scheme": "public_read"},
-            {"name": "welcome",            "type": "text", "scheme": "public_read"}
+            {"name": "📢・level-announcements", "type": "text", "scheme": "public_read"},
+            {"name": "🎫・tickets",            "type": "text", "scheme": "public_read"},
+            {"name": "🎨・colours",            "type": "text", "scheme": "public_read"},
+            {"name": "👋・welcome",            "type": "text", "scheme": "public_read"}
         ]
     },
     {
-        "category": "Team",
+        "category": "Team <3",
         "channels": [
-            {"name": "team-rules", "type": "text", "scheme": "staff_rules"},
-            {"name": "team-chat",  "type": "text", "scheme": "staff_chat"},
-            {"name": "bump",       "type": "text", "scheme": "staff_chat"},
-            {"name": "team-news",  "type": "text", "scheme": "staff_news"}
+            {"name": "🛡️・team-rules", "type": "text", "scheme": "staff_rules"},
+            {"name": "💬・team-chat",  "type": "text", "scheme": "staff_chat"},
+            {"name": "⏰・bump",       "type": "text", "scheme": "staff_chat"},
+            {"name": "📰・team-news",  "type": "text", "scheme": "staff_news"}
         ]
     },
     {
-        "category": "Events",
+        "category": "Events <3",
         "channels": [
-            {"name": "giveaways", "type": "text", "scheme": "public_read"},
-            {"name": "vouch",     "type": "text", "scheme": "public_chat"}
+            {"name": "🎉・gwys",  "type": "text", "scheme": "public_read"},
+            {"name": "⭐・vouch", "type": "text", "scheme": "public_chat"}
         ]
     },
     {
-        "category": "Chill Area",
+        "category": "Chill Area <3",
         "channels": [
-            {"name": "chat",        "type": "text", "scheme": "public_chat"},
-            {"name": "chat-ai",     "type": "text", "scheme": "public_chat"},
-            {"name": "chat-en",     "type": "text", "scheme": "public_chat"},
-            {"name": "discussions", "type": "text", "scheme": "public_chat"}
+            {"name": "☁️・chat",        "type": "text", "scheme": "public_chat"},
+            {"name": "🍸・chat-ai",     "type": "text", "scheme": "public_chat"},
+            {"name": "🪄・chat-en",     "type": "text", "scheme": "public_chat"},
+            {"name": "🐥・discussions", "type": "text", "scheme": "public_chat"}
         ]
     },
     {
-        "category": "Media",
+        "category": "Media <3",
         "channels": [
-            {"name": "media-share", "type": "text", "scheme": "public_media"},
-            {"name": "pfp-share",   "type": "text", "scheme": "public_media"},
-            {"name": "selfies",     "type": "text", "scheme": "public_media"}
+            {"name": "media-share🦅", "type": "text", "scheme": "public_media"},
+            {"name": "pfp-share🛼",   "type": "text", "scheme": "public_media"},
+            {"name": "selfies🐳",     "type": "text", "scheme": "public_media"}
         ]
     },
     {
-        "category": "Fun Area",
+        "category": "Fun Area <3",
         "channels": [
-            {"name": "playground",  "type": "text", "scheme": "public_chat"},
-            {"name": "confessions", "type": "text", "scheme": "confession_feed"},
-            {"name": "birthdays",   "type": "text", "scheme": "public_chat"},
-            {"name": "memes",       "type": "text", "scheme": "public_media"},
-            {"name": "daily-polls", "type": "text", "scheme": "polls_feed"},
-            {"name": "roblox-elites", "type": "text", "scheme": "roblox_exclusive"}
+            {"name": "playground-🤼",    "type": "text", "scheme": "public_chat"},
+            {"name": "🚦confession-🖇",  "type": "text", "scheme": "confession_feed"},
+            {"name": "birthdays",       "type": "text", "scheme": "public_chat"},
+            {"name": "memes🤪",          "type": "text", "scheme": "public_media"},
+            {"name": "🖇-daily-polls",   "type": "text", "scheme": "polls_feed"},
+            {"name": "🖇-roblox-elites", "type": "text", "scheme": "roblox_exclusive"}
         ]
     },
     {
-        "category": "Hobbies",
+        "category": "Hobbies <3",
         "channels": [
-            {"name": "poetry",        "type": "text", "scheme": "public_chat"},
-            {"name": "photography",   "type": "text", "scheme": "public_media"},
-            {"name": "arts-and-crafts", "type": "text", "scheme": "public_media"},
-            {"name": "music-drops",   "type": "text", "scheme": "public_media"}
+            {"name": "shayari-and-poetry💗", "type": "text", "scheme": "public_chat"},
+            {"name": "photography📷",       "type": "text", "scheme": "public_media"},
+            {"name": "arts-and-crafts🎨",    "type": "text", "scheme": "public_media"},
+            {"name": "🎤drop-your-songs",   "type": "text", "scheme": "public_media"}
         ]
     },
     {
-        "category": "Voice Channels",
+        "category": "Voice Chat <3",
         "channels": [
-            {"name": "Chit-Chat", "type": "voice", "user_limit": 12, "scheme": "public_voice"},
-            {"name": "Duo",       "type": "voice", "user_limit": 2,  "scheme": "public_voice"},
-            {"name": "Trio",      "type": "voice", "user_limit": 3,  "scheme": "public_voice"},
-            {"name": "Squad",     "type": "voice", "user_limit": 4,  "scheme": "public_voice"},
-            {"name": "VIP Lounge", "type": "voice", "user_limit": 50, "scheme": "vip_voice"}
+            {"name": "🍕 | chit-chat", "type": "voice", "user_limit": 12, "scheme": "public_voice"},
+            {"name": "🥞 | Duo",       "type": "voice", "user_limit": 2,  "scheme": "public_voice"},
+            {"name": "🍞 | Trio",      "type": "voice", "user_limit": 3,  "scheme": "public_voice"},
+            {"name": "🧀 | squad",     "type": "voice", "user_limit": 4,  "scheme": "public_voice"},
+            {"name": "💽 | Vip",       "type": "voice", "user_limit": 50, "scheme": "vip_voice"}
         ]
     },
     {
-        "category": "Music Rooms",
+        "category": "Music <3",
         "channels": [
-            {"name": "Music Room 1", "type": "voice", "user_limit": 0, "scheme": "music_voice"},
-            {"name": "Music Room 2", "type": "voice", "user_limit": 0, "scheme": "music_voice"}
+            {"name": "🎷-Atom Music", "type": "voice", "user_limit": 0, "scheme": "music_voice"},
+            {"name": "🎵 Hade Music", "type": "voice", "user_limit": 0, "scheme": "music_voice"}
         ]
     }
 ]
@@ -358,6 +358,7 @@ async def log_bot_error(guild: discord.Guild, error_title: str, error_detail: st
 
 memory_lock = asyncio.Lock()
 active_bump_tasks: Dict[int, asyncio.Task] = {}
+active_bump_15m_tasks: Dict[int, asyncio.Task] = {}
 
 def default_server_state() -> Dict[str, Any]:
     return {
@@ -863,9 +864,9 @@ class ConfessionModal(discord.ui.Modal, title="Anonymous Confession Portal"):
         guild_id = guild.id
         state = bot.server_state.setdefault(guild_id, default_server_state())
 
-        target_ch = discord.utils.find(lambda c: "confession" in normalize_text(c.name) and "panel" not in normalize_text(c.name), guild.text_channels)
+        target_ch = discord.utils.find(lambda c: "confessions" in normalize_text(c.name) and "panel" not in normalize_text(c.name), guild.text_channels)
         if not target_ch:
-            return await interaction.followup.send("❌ Confession feed channel not found.", ephemeral=True)
+            return await interaction.followup.send("❌ Confessions channel not found.", ephemeral=True)
 
         state["confession_counter"] = state.get("confession_counter", 0) + 1
         cid = state["confession_counter"]
@@ -877,7 +878,7 @@ class ConfessionModal(discord.ui.Modal, title="Anonymous Confession Portal"):
             color=discord.Color.from_rgb(230, 70, 80),
             timestamp=discord.utils.utcnow()
         )
-        embed.set_footer(text="100% Anonymous • Submit yours via the confession panel!")
+        embed.set_footer(text="100% Anonymous • Submit yours via the confessions panel!")
         
         msg = await target_ch.send(embed=embed)
         await msg.add_reaction("❤️")
@@ -920,7 +921,7 @@ class TicketModal(discord.ui.Modal):
 
         category = discord.utils.find(lambda c: "team" in normalize_text(c.name), guild.categories)
         if not category:
-            category = await guild.create_category(name="Team", reason="Auto-created missing Team category")
+            category = await guild.create_category(name="Team <3", reason="Auto-created missing Team category")
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -1117,7 +1118,7 @@ def is_team_channel():
             await ctx.message.delete()
         except Exception:
             pass
-        await ctx.send("❌ This command can only be used inside **`Team`** or **`Admin Area`** channels.", delete_after=5)
+        await ctx.send("❌ This command can only be used inside **`Team <3`** or **`Admin Area`** channels.", delete_after=5)
         return False
     return commands.check(predicate)
 
@@ -1171,6 +1172,34 @@ async def schedule_bump_reminder(guild: discord.Guild, channel: Optional[discord
             active_bump_tasks[guild.id].cancel()
         except Exception:
             pass
+    if guild.id in active_bump_15m_tasks and not active_bump_15m_tasks[guild.id].done():
+        try:
+            active_bump_15m_tasks[guild.id].cancel()
+        except Exception:
+            pass
+
+    async def _runner_15m():
+        try:
+            state = bot.server_state.setdefault(guild.id, default_server_state())
+            last_bump = state.get("last_bump_time", 0.0)
+            now = time.time()
+            remaining_to_15m = max(0, int(6300 - (now - last_bump))) # 1h 45m elapsed
+            if remaining_to_15m > 0:
+                await asyncio.sleep(remaining_to_15m)
+
+            bump_ch = channel or discord.utils.find(lambda c: "bump" in normalize_text(c.name), guild.text_channels)
+            if bump_ch:
+                embed = discord.Embed(
+                    title="⏰ Bump Reminder (15 Mins Left!)",
+                    description="The server bump timer will be ready in **15 minutes**! Get ready to `.bump`!",
+                    color=discord.Color.orange(),
+                    timestamp=discord.utils.utcnow()
+                )
+                await bump_ch.send(embed=embed)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            active_bump_15m_tasks.pop(guild.id, None)
 
     async def _runner():
         try:
@@ -1196,8 +1225,8 @@ async def schedule_bump_reminder(guild: discord.Guild, channel: Optional[discord
         finally:
             active_bump_tasks.pop(guild.id, None)
 
-    task = asyncio.create_task(_runner())
-    active_bump_tasks[guild.id] = task
+    active_bump_15m_tasks[guild.id] = asyncio.create_task(_runner_15m())
+    active_bump_tasks[guild.id] = asyncio.create_task(_runner())
 
 @bot.event
 async def on_ready():
@@ -1379,21 +1408,33 @@ async def cmd_afk(ctx: commands.Context, *, reason: str = "AFK"):
     lower_r = reason.lower()
     sad_words = ["sad", "depressed", "cry", "crying", "unhappy", "down", "hurt", "tired", "heartbroken", "gloomy", "lonely"]
     happy_words = ["happy", "glad", "joy", "excited", "vibing", "celebrate", "chilling", "good", "fun", "blessed"]
+    charge_words = ["charging", "phone", "battery", "low", "power", "dead"]
+    leaving_words = ["leaving", "out", "sleep", "bed", "school", "work", "offline", "bye", "gn"]
 
     if any(w in lower_r for w in sad_words):
         mood = "sad"
         status_header = "🥺 Gone AFK (Feeling Down)"
         color = discord.Color.from_rgb(130, 140, 200)
-        subtext = "Hope you feel better soon! Take care of yourself 🤍"
+        subtext = f"🥺 **{ctx.author.display_name}** stepped away feeling a bit down: *{reason}*. Send them love when they're back! 🤍"
     elif any(w in lower_r for w in happy_words):
         mood = "happy"
         status_header = "✨ Gone AFK (Feeling Great!)"
         color = discord.Color.gold()
-        subtext = "Enjoy your time and keep smiling! ✨"
+        subtext = f"✨ **{ctx.author.display_name}** went AFK to keep vibing elsewhere: *{reason}*! Catch you later! 🎶"
+    elif any(w in lower_r for w in charge_words):
+        mood = "charging"
+        status_header = "🪫 Gone AFK (Charging Device)"
+        color = discord.Color.orange()
+        subtext = f"🪫 **{ctx.author.display_name}** went AFK because their device is dying: *{reason}*. Back once plugged in! ⚡"
+    elif any(w in lower_r for w in leaving_words):
+        mood = "leaving"
+        status_header = "🌙 Gone AFK (Heading Out)"
+        color = discord.Color.purple()
+        subtext = f"🌙 **{ctx.author.display_name}** has headed out for the time being: *{reason}*."
     else:
         status_header = "💤 Gone AFK"
         color = discord.Color.teal()
-        subtext = "I'll let everyone know you're away."
+        subtext = f"💤 **{ctx.author.display_name}** is AFK: *{reason}*"
 
     state["afk_users"][str(ctx.author.id)] = {
         "reason": reason,
@@ -1404,7 +1445,7 @@ async def cmd_afk(ctx: commands.Context, *, reason: str = "AFK"):
 
     embed = discord.Embed(
         title=status_header,
-        description=f"{ctx.author.mention} is now AFK: **{reason}**\n*{subtext}*",
+        description=subtext,
         color=color
     )
     embed.set_footer(text="Notice clears in 10s. AFK remains saved until you speak again!")
@@ -1413,11 +1454,6 @@ async def cmd_afk(ctx: commands.Context, *, reason: str = "AFK"):
 @bot.command(name="bump")
 @is_bump_channel()
 async def cmd_bump(ctx: commands.Context):
-    try:
-        await ctx.message.delete(delay=10)
-    except Exception:
-        pass
-
     state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
     last_bump = state.get("last_bump_time", 0.0)
     elapsed = time.time() - last_bump
@@ -1433,7 +1469,24 @@ async def cmd_bump(ctx: commands.Context):
     await add_xp(ctx.author, 250, bypass_cooldown=True)
     await save_state_to_memory(ctx.guild, data=state)
 
-    await ctx.send(f"👊 {ctx.author.mention}, bump logged! I'll ping **{BUMP_ROLE_NAME}** in 2 hours.", delete_after=10)
+    import random
+    custom_thanks = [
+        f"💖 Thank you so much {ctx.author.mention} for bumping the server! You've earned **+250 XP** for helping Chill-Verse grow! Next bump is ready in **2h**.",
+        f"🚀 Huge shoutout to {ctx.author.mention} for the bump! **+250 XP** added to your profile. Let's keep the momentum going!",
+        f"✨ You're amazing, {ctx.author.mention}! Thanks for supporting Chill-Verse with a bump. Enjoy your **+250 XP** reward!",
+        f"🌟 Appreciate you, {ctx.author.mention}! Bump logged successfully, **+250 XP** credited. See you in **2 hours** for the next one!"
+    ]
+    chosen_thank = random.choice(custom_thanks)
+
+    embed = discord.Embed(
+        title="🚀 Server Bump Logged Successfully!",
+        description=f"{chosen_thank}\n\n`[▰▱▱▱▱▱▱▱▱▱] 2h 0m remaining`",
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_footer(text=f"Bumped by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    
+    await ctx.send(embed=embed)
     await schedule_bump_reminder(ctx.guild, ctx.channel)
 
 @bot.command(name="bumptimer", aliases=["nextbump", "bumpcheck", "bp"])
@@ -1638,9 +1691,9 @@ async def cmd_botlist(ctx: commands.Context):
             "• `.rank` — Displays user level (capped at 70), total XP, and detailed card\n"
             "• `.leaderboard` — Shows top 10 most active members by XP\n"
             "• `.confess` — Triggers 100% anonymous confession modal via DMs\n"
-            "• `.afk [reason]` — Sets AFK status with 10s auto-delete\n"
+            "• `.afk [reason]` — Sets AFK status with 10s auto-delete & custom moods\n"
             "• `.bumptimer` — Checks exact countdown until next bump\n"
-            "• `.bump` — Logs manual server bump (Strict 2-hour lockout enforced)\n"
+            "• `.bump` — Logs manual server bump with custom thank you & persistent card\n"
             "• `.setbirthday <DD-MM>` — Registers birthday for daily announcements\n"
             "• `.birthday [member]` — Checks registered birthday\n"
             "• `.poll <question>` — Dispatches an official server poll"
@@ -1656,7 +1709,7 @@ async def cmd_botlist(ctx: commands.Context):
         ),
         inline=False
     )
-    embed.set_footer(text="Restricted exclusively to Team / Admin channels.")
+    embed.set_footer(text="Restricted exclusively to Team <3 / Admin channels.")
     await ctx.send(embed=embed)
 
 # ==============================================================================
@@ -2023,7 +2076,7 @@ async def cmd_postgender(ctx: commands.Context):
         description="Select your gender identity from the dropdown below to update your profile role.",
         color=discord.Color.purple()
     )
-    await ch.send(embed=embed, view=GenderView())
+    await ctx.send(embed=embed, view=GenderView())
     try:
         await ctx.message.delete()
     except Exception:
