@@ -188,6 +188,90 @@ ROLE_PERMISSIONS_CONFIG = {
     }
 }
 
+EXTENDED_SERVER_BLUEPRINT = [
+    {
+        "category": "Info 🩵",
+        "channels": [
+            {"name": "📢・level-announcements", "type": "text", "scheme": "public_read"},
+            {"name": "🎫・tickets",            "type": "text", "scheme": "public_read"},
+            {"name": "🎨・colours",            "type": "text", "scheme": "public_read"},
+            {"name": "👋・welcome",            "type": "text", "scheme": "public_read"}
+        ]
+    },
+    {
+        "category": "Team <3",
+        "channels": [
+            {"name": "🛡️・team-rules", "type": "text", "scheme": "staff_rules"},
+            {"name": "💬・team-chat",  "type": "text", "scheme": "staff_chat"},
+            {"name": "⏰・bump",       "type": "text", "scheme": "staff_chat"},
+            {"name": "📰・team-news",  "type": "text", "scheme": "staff_news"}
+        ]
+    },
+    {
+        "category": "Events <3",
+        "channels": [
+            {"name": "🎉・gwys",  "type": "text", "scheme": "public_read"},
+            {"name": "⭐・vouch", "type": "text", "scheme": "public_chat"}
+        ]
+    },
+    {
+        "category": "Chill Area <3",
+        "channels": [
+            {"name": "☁️・chat",        "type": "text", "scheme": "public_chat"},
+            {"name": "🍸・chat-ai",     "type": "text", "scheme": "public_chat"},
+            {"name": "🪄・chat-en",     "type": "text", "scheme": "public_chat"},
+            {"name": "🐥・discussions", "type": "text", "scheme": "public_chat"}
+        ]
+    },
+    {
+        "category": "Media <3",
+        "channels": [
+            {"name": "media-share🦅", "type": "text", "scheme": "public_media"},
+            {"name": "pfp-share🛼",   "type": "text", "scheme": "public_media"},
+            {"name": "selfies🐳",     "type": "text", "scheme": "public_media"}
+        ]
+    },
+    {
+        "category": "Fun Area <3",
+        "channels": [
+            {"name": "playground-🤼",    "type": "text", "scheme": "public_chat"},
+            {"name": "🚦confession-🖇",  "type": "text", "scheme": "confession_feed"},
+            {"name": "birthdays",       "type": "text", "scheme": "public_chat"},
+            {"name": "memes🤪",          "type": "text", "scheme": "public_media"},
+            {"name": "🖇-daily-polls",   "type": "text", "scheme": "polls_feed"},
+            {"name": "🖇-roblox-elites", "type": "text", "scheme": "roblox_exclusive"}
+        ]
+    },
+    {
+        "category": "Hobbies <3",
+        "channels": [
+            {"name": "shayari-and-poetry💗", "type": "text", "scheme": "public_chat"},
+            {"name": "photography📷",       "type": "text", "scheme": "public_media"},
+            {"name": "arts-and-crafts🎨",    "type": "text", "scheme": "public_media"},
+            {"name": "🎤drop-your-songs",   "type": "text", "scheme": "public_media"}
+        ]
+    },
+    {
+        "category": "Voice Chat <3",
+        "channels": [
+            {"name": "🍕 | chit-chat", "type": "voice", "user_limit": 12, "scheme": "public_voice"},
+            {"name": "🥞 | Duo",       "type": "voice", "user_limit": 2,  "scheme": "public_voice"},
+            {"name": "🍞 | Trio",      "type": "voice", "user_limit": 3,  "scheme": "public_voice"},
+            {"name": "🧀 | squad",     "type": "voice", "user_limit": 4,  "scheme": "public_voice"},
+            {"name": "💽 | Vip",       "type": "voice", "user_limit": 50, "scheme": "vip_voice"}
+        ]
+    },
+    {
+        "category": "Music <3",
+        "channels": [
+            {"name": "🎷-Atom Music", "type": "voice", "user_limit": 0, "scheme": "music_voice"},
+            {"name": "🎵 Hade Music", "type": "voice", "user_limit": 0, "scheme": "music_voice"}
+        ]
+    }
+]
+
+CRITICAL_PROTECTED_CHANNELS = ["bot-memory", "bot_memory", "backup", "audit-log"]
+
 LEGACY_ROLE_MIGRATION = {
     "admin": ADMIN_ROLE_NAME,
     "authority": AUTHORITY_ROLE_NAME,
@@ -356,7 +440,86 @@ async def load_state_from_memory(guild: discord.Guild, memory_channel_name: str 
     return {}
 
 # ==============================================================================
-# 4. PROGRESSION ENGINE (LEVELS & TENURE)
+# 4. PERMISSION OVERWRITE ROUTER
+# ==============================================================================
+
+def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, discord.PermissionOverwrite]:
+    staff_roles = [find_role_resilient(guild, r) for r in RESTRICTED_ADMIN_ROLES]
+    active_staff = [r for r in staff_roles if r]
+    admin_role = find_role_resilient(guild, ADMIN_ROLE_NAME)
+    roblox_role = find_role_resilient(guild, ROBLOX_ROLE_NAME)
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, manage_channels=True,
+            manage_permissions=True, embed_links=True, attach_files=True
+        )
+    }
+
+    if scheme == "public_chat":
+        overwrites[guild.default_role] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, read_message_history=True, add_reactions=True
+        )
+    elif scheme == "public_media":
+        overwrites[guild.default_role] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, read_message_history=True,
+            attach_files=True, embed_links=True, add_reactions=True
+        )
+    elif scheme in ["public_read", "polls_feed", "confession_feed"]:
+        overwrites[guild.default_role] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=False, read_message_history=True, add_reactions=True
+        )
+        for role in active_staff:
+            overwrites[role] = discord.PermissionOverwrite(send_messages=True)
+    elif scheme == "roblox_exclusive":
+        overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
+        if roblox_role:
+            overwrites[roblox_role] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True,
+                attach_files=True, embed_links=True
+            )
+        for role in active_staff:
+            overwrites[role] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True
+            )
+    elif scheme == "public_voice":
+        overwrites[guild.default_role] = discord.PermissionOverwrite(
+            view_channel=True, connect=True, speak=True, stream=True
+        )
+    elif scheme == "vip_voice":
+        overwrites[guild.default_role] = discord.PermissionOverwrite(
+            view_channel=True, connect=True, speak=True, stream=True
+        )
+        if admin_role:
+            overwrites[admin_role] = discord.PermissionOverwrite(
+                priority_speaker=True, move_members=True, mute_members=True
+            )
+    elif scheme == "music_voice":
+        overwrites[guild.default_role] = discord.PermissionOverwrite(
+            view_channel=True, connect=True, speak=True, stream=False, use_soundboard=False
+        )
+    elif scheme == "staff_chat":
+        overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
+        for role in active_staff:
+            overwrites[role] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True,
+                attach_files=True, embed_links=True
+            )
+    elif scheme in ["staff_rules", "staff_news"]:
+        overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
+        for role in active_staff:
+            overwrites[role] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=False, read_message_history=True, add_reactions=True
+            )
+        if admin_role:
+            overwrites[admin_role] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, manage_messages=True
+            )
+    return overwrites
+
+# ==============================================================================
+# 5. PROGRESSION ENGINE (LEVELS & TENURE)
 # ==============================================================================
 
 xp_cooldowns: Dict[int, float] = {}
@@ -466,7 +629,7 @@ async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool =
         await save_state_to_memory(guild, data=bot.server_state[guild_id])
 
 # ==============================================================================
-# 5. INTERACTIVE PERSISTENT UI VIEWS
+# 6. INTERACTIVE PERSISTENT UI VIEWS & MODALS
 # ==============================================================================
 
 class CommunityRolesView(discord.ui.View):
@@ -568,6 +731,53 @@ class GenderView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(GenderSelect())
 
+class ConfessionModal(discord.ui.Modal, title="Anonymous Confession Portal"):
+    confession_text = discord.ui.TextInput(
+        label="Your Confession",
+        style=discord.TextStyle.paragraph,
+        placeholder="Type your anonymous confession here...",
+        required=True,
+        max_length=1500
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        guild_id = guild.id
+
+        target_ch = discord.utils.find(lambda c: "confession" in normalize_text(c.name) and "panel" not in normalize_text(c.name), guild.text_channels)
+        if not target_ch:
+            return await interaction.followup.send("❌ Confession feed channel not found.", ephemeral=True)
+
+        if guild_id not in bot.server_state:
+            bot.server_state[guild_id] = {}
+        confs = bot.server_state[guild_id].setdefault("confessions", [])
+        cid = len(confs) + 1
+        text = self.confession_text.value
+        confs.append({"id": cid, "content": text, "timestamp": datetime.now(timezone.utc).isoformat()})
+
+        embed = discord.Embed(
+            title=f"💌 Anonymous Confession #{cid}",
+            description=f"*{text}*",
+            color=discord.Color.from_rgb(230, 70, 80),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text="Submit yours via the confession panel form button!")
+        msg = await target_ch.send(embed=embed)
+        await msg.add_reaction("❤️")
+        await msg.add_reaction("💔")
+
+        await interaction.followup.send("🤫 Your anonymous confession has been dispatched successfully!", ephemeral=True)
+        await save_state_to_memory(guild, data=bot.server_state[guild_id])
+
+class ConfessionPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Write Confession", style=discord.ButtonStyle.danger, emoji="💌", custom_id="btn_open_confession_modal")
+    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ConfessionModal())
+
 class TicketControlsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -634,7 +844,7 @@ class TicketLaunchView(discord.ui.View):
             await interaction.followup.send("❌ Could not create ticket channel.", ephemeral=True)
 
 # ==============================================================================
-# 6. BOT CLIENT & PERMISSION HELPERS
+# 7. BOT CLIENT & PERMISSION HELPERS
 # ==============================================================================
 
 class ChillVerseBot(commands.Bot):
@@ -651,6 +861,7 @@ class ChillVerseBot(commands.Bot):
         self.add_view(GenderView())
         self.add_view(TicketLaunchView())
         self.add_view(TicketControlsView())
+        self.add_view(ConfessionPanelView())
 
 bot = ChillVerseBot()
 
@@ -694,7 +905,7 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
         pass
 
 # ==============================================================================
-# 7. LISTENERS (AFK, BUMP, BOOSTS, EXP, AUTO-REACTIONS, THREADS)
+# 8. LISTENERS (AFK, BUMP, BOOSTS, EXP, AUTO-REACTIONS, WELCOME, THREADS)
 # ==============================================================================
 
 @bot.event
@@ -721,6 +932,18 @@ async def on_member_join(member: discord.Member):
             await member.add_roles(newbie_role, reason="Auto-assign on onboarding")
         except (discord.Forbidden, discord.HTTPException):
             pass
+
+    welcome_ch = discord.utils.find(lambda c: "welcome" in normalize_text(c.name), member.guild.text_channels)
+    if welcome_ch:
+        embed = discord.Embed(
+            title="✨ Welcome to Chill-Verse! 🌴",
+            description=f"Hey {member.mention}! We are thrilled to have you here. 🎉\n\n• Grab your identity roles in <#colours>\n• Open a support ticket in <#tickets> if you need assistance!",
+            color=discord.Color.from_rgb(255, 105, 180),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Member #{len(member.guild.members)}")
+        await welcome_ch.send(content=f"Welcome {member.mention}!", embed=embed)
 
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
@@ -803,7 +1026,7 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 # ==============================================================================
-# 8. SYSTEM & USER COMMANDS
+# 9. SYSTEM & USER COMMANDS
 # ==============================================================================
 
 async def bump_reminder_task(guild: discord.Guild, channel: discord.TextChannel):
@@ -844,38 +1067,6 @@ async def cmd_bump(ctx: commands.Context):
     await ctx.send(f"👊 {ctx.author.mention}, bump logged! I'll ping **{BUMP_ROLE_NAME}** in 2 hours.", delete_after=10)
     await add_xp(ctx.author, 250, bypass_cooldown=True)
     asyncio.create_task(bump_reminder_task(ctx.guild, ctx.channel))
-
-@bot.command(name="confess")
-async def cmd_confess(ctx: commands.Context, *, confession_text: str):
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
-    target_ch = discord.utils.find(lambda c: "confession" in normalize_text(c.name), ctx.guild.text_channels)
-    if not target_ch:
-        return await ctx.send("❌ Confession channel not found.", delete_after=10)
-
-    guild_id = ctx.guild.id
-    if guild_id not in bot.server_state:
-        bot.server_state[guild_id] = {}
-    confs = bot.server_state[guild_id].setdefault("confessions", [])
-    cid = len(confs) + 1
-    confs.append({"id": cid, "content": confession_text, "timestamp": datetime.now(timezone.utc).isoformat()})
-
-    embed = discord.Embed(
-        title=f"💌 Anonymous Confession #{cid}",
-        description=f"*{confession_text}*",
-        color=discord.Color.from_rgb(230, 70, 80),
-        timestamp=discord.utils.utcnow()
-    )
-    embed.set_footer(text="Send yours via .confess <message>")
-    msg = await target_ch.send(embed=embed)
-    await msg.add_reaction("❤️")
-    await msg.add_reaction("💔")
-
-    await ctx.send(f"🤫 {ctx.author.mention}, your confession was dispatched!", delete_after=10)
-    await save_state_to_memory(ctx.guild, data=bot.server_state[guild_id])
 
 @bot.command(name="rank", aliases=["level", "xp"])
 async def cmd_rank(ctx: commands.Context, member: Optional[discord.Member] = None):
@@ -959,6 +1150,7 @@ async def cmd_botlist(ctx: commands.Context):
     embed.add_field(
         name="🏗️ Setup & Infrastructure",
         value=(
+            "• `.setup_channels` — Deploys missing channels & auto-posts panels safely\n"
             "• `.syncperms` — Enforces staff and tier permission matrices\n"
             "• `.autorole_setup` — Provisions all server roles and cosmetic tiers\n"
             "• `.resetroles` — Wipes and re-provisions all managed server roles"
@@ -971,7 +1163,8 @@ async def cmd_botlist(ctx: commands.Context):
             "• `.communitypanel` — Spawns PollPings and Roblox role picker\n"
             "• `.postcolors` — Spawns the chat color selection dropdown\n"
             "• `.postgender` — Spawns the identity role dropdown\n"
-            "• `.posttickets` — Spawns the support ticket launcher"
+            "• `.posttickets` — Spawns the support ticket launcher\n"
+            "• `.postconfession` — Spawns the anonymous confession form panel"
         ),
         inline=False
     )
@@ -992,7 +1185,6 @@ async def cmd_botlist(ctx: commands.Context):
             "• `.leaderboard` — Shows top 10 most active members by XP\n"
             "• `.afk <reason>` — Sets AFK status with auto-removal and alerts\n"
             "• `.bump` — Logs manual server bump and 2-hour reminder timer\n"
-            "• `.confess <msg>` — Posts secure anonymous confession\n"
             "• `.poll <question>` — Dispatches an official server poll"
         ),
         inline=False
@@ -1010,7 +1202,7 @@ async def cmd_botlist(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 # ==============================================================================
-# 9. MODERATION SUITE
+# 10. MODERATION SUITE
 # ==============================================================================
 
 @bot.command(name="kick")
@@ -1063,7 +1255,7 @@ async def cmd_purge(ctx: commands.Context, amount: int):
     await ctx.send(f"🧹 Purged **{len(deleted)}** message(s).", delete_after=5)
 
 # ==============================================================================
-# 10. DEPLOYMENT, PERMISSION SYNC, ROLE RESET & MIGRATION
+# 11. DEPLOYMENT, SAFE CHANNELS & ROLE SETUP
 # ==============================================================================
 
 @bot.command(name="syncperms")
@@ -1195,6 +1387,45 @@ async def cmd_resetroles(ctx: commands.Context):
 
     await msg.edit(content=f"✅ **Reset complete! Deleted `{deleted_count}` old roles and re-added all server roles fresh.**")
 
+@bot.command(name="setup_channels")
+@commands.has_permissions(administrator=True)
+async def cmd_setup_channels(ctx: commands.Context):
+    guild = ctx.guild
+    status = await ctx.send("⏳ **Checking blueprint and adding missing channels safely (existing channels are untouched)...**")
+
+    created = 0
+    for cat_data in EXTENDED_SERVER_BLUEPRINT:
+        cat_name = cat_data["category"]
+        category = discord.utils.find(lambda c: normalize_text(c.name) == normalize_text(cat_name), guild.categories)
+        if not category:
+            category = await guild.create_category(name=cat_name, reason="Blueprint Category Init")
+            await asyncio.sleep(0.35)
+
+        for ch in cat_data["channels"]:
+            ch_name, ch_type, scheme = ch["name"], ch["type"], ch["scheme"]
+            user_lim = ch.get("user_limit", 0)
+            overwrites = generate_channel_overwrites(guild, scheme)
+
+            target_list = guild.text_channels if ch_type == "text" else guild.voice_channels
+            # Look for existing channel by name within this category to avoid touching working ones
+            channel = discord.utils.find(lambda c: normalize_text(c.name) == normalize_text(ch_name) and c.category_id == category.id, target_list)
+
+            if not channel:
+                if ch_type == "text":
+                    channel = await guild.create_text_channel(name=ch_name, category=category, overwrites=overwrites, reason="Adding missing blueprint channel")
+                else:
+                    channel = await guild.create_voice_channel(name=ch_name, category=category, user_limit=user_lim, overwrites=overwrites, reason="Adding missing blueprint channel")
+                created += 1
+                await asyncio.sleep(0.35)
+
+    embed = discord.Embed(
+        title="✨ Channel Setup Complete",
+        description=f"• **New Missing Channels Added:** `{created}`\n• **Existing Working Channels:** Left completely untouched ✅",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow()
+    )
+    await status.edit(content=None, embed=embed)
+
 @bot.command(name="removeadminrole")
 @commands.has_permissions(administrator=True)
 async def cmd_removeadminrole(ctx: commands.Context):
@@ -1282,6 +1513,21 @@ async def cmd_posttickets(ctx: commands.Context):
     except (discord.Forbidden, discord.HTTPException):
         pass
 
+@bot.command(name="postconfession")
+@commands.has_permissions(administrator=True)
+async def cmd_postconfession(ctx: commands.Context):
+    ch = discord.utils.find(lambda c: "confession" in normalize_text(c.name) and "panel" not in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
+    embed = discord.Embed(
+        title="💌 Anonymous Confession Portal",
+        description="Click the button below to submit a secure, completely anonymous confession form.\n\n*Your identity is never logged or shown.*",
+        color=discord.Color.from_rgb(230, 70, 80)
+    )
+    await ch.send(embed=embed, view=ConfessionPanelView())
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
 @bot.command(name="backup")
 @commands.has_permissions(administrator=True)
 async def cmd_backup(ctx: commands.Context):
@@ -1311,7 +1557,7 @@ async def cmd_restorebackup(ctx: commands.Context):
     await status.edit(content=None, embed=embed)
 
 # ==============================================================================
-# 11. APPLICATION ENTRY POINT
+# 12. APPLICATION ENTRY POINT
 # ==============================================================================
 
 if __name__ == "__main__":
