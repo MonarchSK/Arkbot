@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+import traceback
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -15,15 +16,18 @@ from discord.ext import commands, tasks
 # 1. SERVER ROLES & PERMISSION MATRIX CONFIGURATION
 # ==============================================================================
 
-ADMIN_ROLE_NAME     = "୨୧ Highness ☕⸝⸝﹗"
-AUTHORITY_ROLE_NAME = "·.✦Authority✦.·"
-HEAD_MOD_ROLE_NAME  = "✦•┈๑⋅⋯Head Moderator⋯⋅๑┈•✦"
-MOD_ROLE_NAME       = "⋆. 𐙚˚࿔ 𝒎𝒐𝒅𝒆𝒓𝒂𝒕𝒐𝒓 𝜗𝜚˚⋆"
-TRIAL_MOD_ROLE_NAME = "☆⋆｡Trial mod 𖦹°‧★"
-TEAM_ROLE_NAME      = "𖦹°‧★ ⏜︵   𝒄𝒉𝒊𝒍𝒍-𝒗𝒆𝒓𝒔𝒆 𝒕𝒆𝒂𝒎    ⏜︵ 𖦹°‧★"
+ADMIN_ROLE_NAME          = "୨୧ Highness ☕⸝⸝﹗"
+SUPREME_LEADER_ROLE_NAME = "୨ৎ ˖ 𝑺𝒖𝒑𝒓𝒆𝒎𝒆 𝑳𝒆𝒂𝒅𝒆𝒓"
+SUPREME_LEADER_COLOR     = discord.Color.from_rgb(1, 1, 1) # Near-black
+AUTHORITY_ROLE_NAME      = "·.✦Authority✦.·"
+HEAD_MOD_ROLE_NAME       = "✦•┈๑⋅⋯Head Moderator⋯⋅๑┈•✦"
+MOD_ROLE_NAME            = "⋆. 𐙚˚࿔ 𝒎𝒐𝒅𝒆𝒓𝒂𝒕𝒐𝒓 𝜗𝜚˚⋆"
+TRIAL_MOD_ROLE_NAME      = "☆⋆｡Trial mod 𖦹°‧★"
+TEAM_ROLE_NAME           = "𖦹°‧★ ⏜︵   𝒄𝒉𝒊𝒍𝒍-𝒗𝒆𝒓𝒔𝒆 𝒕𝒆𝒂𝒎    ⏜︵ 𖦹°‧★"
 
 RESTRICTED_ADMIN_ROLES = [
     ADMIN_ROLE_NAME,
+    SUPREME_LEADER_ROLE_NAME,
     AUTHORITY_ROLE_NAME,
     HEAD_MOD_ROLE_NAME,
     MOD_ROLE_NAME,
@@ -143,6 +147,11 @@ LEVEL_TIER_ROLES = {
 }
 
 ROLE_PERMISSIONS_CONFIG = {
+    SUPREME_LEADER_ROLE_NAME: {
+        "hoist": True,
+        "color": SUPREME_LEADER_COLOR,
+        "permissions": discord.Permissions(administrator=True)
+    },
     ADMIN_ROLE_NAME: {
         "hoist": True,
         "color": discord.Color.from_rgb(255, 105, 180),
@@ -191,6 +200,13 @@ ROLE_PERMISSIONS_CONFIG = {
 }
 
 EXTENDED_SERVER_BLUEPRINT = [
+    {
+        "category": "Admin Area 🔒",
+        "channels": [
+            {"name": "🤖・bot-commands", "type": "text", "scheme": "supreme_admin_only"},
+            {"name": "🛡️・bot-errors",   "type": "text", "scheme": "supreme_admin_only"}
+        ]
+    },
     {
         "category": "Info 🩵",
         "channels": [
@@ -321,6 +337,21 @@ def is_staff_member(member: discord.Member) -> bool:
     allowed = {normalize_text(r) for r in RESTRICTED_ADMIN_ROLES}
     return not user_roles.isdisjoint(allowed)
 
+async def log_bot_error(guild: discord.Guild, error_title: str, error_detail: str):
+    error_ch = discord.utils.find(lambda c: "bot-errors" in normalize_text(c.name), guild.text_channels)
+    if not error_ch:
+        return
+    embed = discord.Embed(
+        title=f"🚨 Bot Exception — {error_title}",
+        description=f"```py\n{error_detail[:1800]}\n```",
+        color=discord.Color.red(),
+        timestamp=discord.utils.utcnow()
+    )
+    try:
+        await error_ch.send(embed=embed)
+    except Exception:
+        pass
+
 # ==============================================================================
 # 3. DATABASE STATE & MEMORY RETENTION
 # ==============================================================================
@@ -406,8 +437,8 @@ async def save_state_to_memory(guild: discord.Guild, memory_channel_name: str = 
                         await asyncio.sleep(0.35)
                     except Exception:
                         pass
-        except (discord.Forbidden, discord.HTTPException):
-            pass
+        except (discord.Forbidden, discord.HTTPException) as e:
+            await log_bot_error(guild, "SaveStateToMemory", str(e))
 
 async def load_state_from_memory(guild: discord.Guild, memory_channel_name: str = "bot-memory") -> dict:
     channel = discord.utils.find(lambda c: c.name == memory_channel_name, guild.text_channels)
@@ -445,7 +476,10 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
     staff_roles = [find_role_resilient(guild, r) for r in RESTRICTED_ADMIN_ROLES]
     active_staff = [r for r in staff_roles if r]
     admin_role = find_role_resilient(guild, ADMIN_ROLE_NAME)
+    supreme_role = find_role_resilient(guild, SUPREME_LEADER_ROLE_NAME)
     roblox_role = find_role_resilient(guild, ROBLOX_ROLE_NAME)
+    tier_roles = [find_role_resilient(guild, cfg["name"]) for cfg in LEVEL_TIER_ROLES.values()]
+    active_tiers = [r for r in tier_roles if r]
 
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(),
@@ -479,7 +513,7 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
                 view_channel=True, connect=True, speak=True, stream=False, use_soundboard=False
             )
             
-        for role in active_staff:
+        for role in active_staff + active_tiers:
             overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
     elif scheme == "roblox_exclusive":
@@ -512,11 +546,64 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
             overwrites[admin_role] = discord.PermissionOverwrite(
                 view_channel=True, send_messages=True, manage_messages=True
             )
+
+    elif scheme == "supreme_admin_only":
+        overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
+        for role in [admin_role, supreme_role]:
+            if role:
+                overwrites[role] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True,
+                    attach_files=True, embed_links=True
+                )
             
     return overwrites
 
 # ==============================================================================
-# 5. PROGRESSION & MILESTONES ENGINE
+# 5. AUTO-MODERATION ENGINE
+# ==============================================================================
+
+FORBIDDEN_WORDS = ["badword1", "badword2", "spamphrase"]
+SPAM_LINK_REGEX = re.compile(r"https?://(?:www\.)?(?:discord\.(?:gg|io|me|li|com/invite)|t\.me|bit\.ly)/\S+", re.IGNORECASE)
+BYPASS_ROLES = RESTRICTED_ADMIN_ROLES + [BOOSTER_ROLE_NAME]
+
+async def run_automod_check(message: discord.Message) -> bool:
+    if message.author.bot or not message.guild or is_staff_member(message.author):
+        return False
+
+    user_role_names = {normalize_text(r.name) for r in message.author.roles}
+    allowed_bypass = {normalize_text(r) for r in BYPASS_ROLES}
+    if not user_role_names.isdisjoint(allowed_bypass):
+        return False
+
+    content_clean = normalize_text(message.content)
+    
+    if SPAM_LINK_REGEX.search(message.content):
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.channel.send(f"⚠️ {message.author.mention}, external invite or spam links are not permitted here.", delete_after=6)
+        return True
+
+    for word in FORBIDDEN_WORDS:
+        if word in content_clean:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            
+            state = bot.server_state.setdefault(message.guild.id, default_server_state())
+            uid_str = str(message.author.id)
+            state["user_warnings"][uid_str] = state["user_warnings"].get(uid_str, 0) + 1
+            await save_state_to_memory(message.guild, data=state)
+            
+            await message.channel.send(f"⚠️ {message.author.mention}, your message contained prohibited language and was removed. Warning recorded.", delete_after=6)
+            return True
+
+    return False
+
+# ==============================================================================
+# 6. PROGRESSION & MILESTONES ENGINE
 # ==============================================================================
 
 xp_cooldowns: Dict[int, float] = {}
@@ -542,7 +629,7 @@ async def verify_member_tenure(member: discord.Member):
                 try:
                     await member.add_roles(*roles_to_grant, reason="Tenure: 1+ Year Milestone reached")
                     await add_xp(member, 1000, bypass_cooldown=True)
-                except (discord.Forbidden, discord.HTTPException):
+                except Exception:
                     pass
 
             state["last_anniversary"][str(member.id)] = current_year
@@ -581,7 +668,7 @@ async def sync_member_level_tier(member: discord.Member, new_level: int):
             await member.remove_roles(*to_remove, reason="Level tier advancement")
         if target_role and target_role not in member.roles and guild.me.top_role > target_role:
             await member.add_roles(target_role, reason="Level tier advancement")
-    except (discord.Forbidden, discord.HTTPException):
+    except Exception:
         pass
 
 async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool = False):
@@ -619,9 +706,19 @@ async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool =
         await sync_member_level_tier(member, curr_lvl)
         
         current_tier_name = "Standard Member"
+        tier_perks = "Standard Chat & Voice Access"
         for (min_l, max_l), cfg in LEVEL_TIER_ROLES.items():
             if min_l <= curr_lvl <= max_l:
                 current_tier_name = cfg["name"]
+                p = cfg["permissions"]
+                perk_list = []
+                if p.embed_links: perk_list.append("Embed Links")
+                if p.attach_files: perk_list.append("Attach Files")
+                if p.use_external_emojis: perk_list.append("External Emojis")
+                if p.stream: perk_list.append("Video Streaming")
+                if p.use_soundboard: perk_list.append("Soundboard Access")
+                if p.priority_speaker: perk_list.append("Priority Speaker")
+                tier_perks = " • ".join(perk_list) if perk_list else "Advanced Tier Perks"
                 break
 
         next_goal_xp = curr_lvl * 300
@@ -629,28 +726,27 @@ async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool =
         
         if ann_ch:
             embed = discord.Embed(
-                title="⚡ Milestone Reached — Level Up!",
+                title="⚡ Level Advanced — Milestone Unlocked!",
                 description=(
-                    f"Congratulations {member.mention}! You've climbed higher in Chill-Verse. 🎉\n\n"
-                    f"• **New Level:** `Level {curr_lvl}` / `{MAX_LEVEL}`\n"
-                    f"• **Unlocked Tier Role:** `{current_tier_name}`\n"
-                    f"• **Next Level Target:** `{curr_xp:,} / {next_goal_xp:,} XP`"
+                    f"Congratulations {member.mention}! You've leveled up to **Level {curr_lvl}**! 🎉\n\n"
+                    f"• **Unlocked Role:** `{current_tier_name}`\n"
+                    f"• **New Tier Perks:** `{tier_perks}`\n"
+                    f"• **Next Goal:** `{curr_xp:,} / {next_goal_xp:,} XP`"
                 ),
                 color=discord.Color.gold(),
                 timestamp=discord.utils.utcnow()
             )
             embed.set_thumbnail(url=member.display_avatar.url)
-            embed.set_footer(text="Keep chatting in voice & text to unlock more perks!")
-            
+            embed.set_footer(text="Keep participating to rank higher on the leaderboard!")
             try:
-                await ann_ch.send(content=f"🎉 Great job, {member.mention}!", embed=embed)
-            except (discord.Forbidden, discord.HTTPException):
+                await ann_ch.send(content=f"🎉 Great milestone, {member.mention}!", embed=embed)
+            except Exception:
                 pass
 
         await save_state_to_memory(guild, data=state)
 
 # ==============================================================================
-# 6. INTERACTIVE PANELS, MODALS & VIEWS
+# 7. INTERACTIVE PANELS, MODALS & VIEWS
 # ==============================================================================
 
 class CommunityRolesView(discord.ui.View):
@@ -794,6 +890,97 @@ class ConfessionPanelView(discord.ui.View):
     async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ConfessionModal())
 
+class TicketModal(discord.ui.Modal):
+    def __init__(self, ticket_type: str):
+        super().__init__(title=f"Support Portal — {ticket_type}")
+        self.ticket_type = ticket_type
+        
+        self.reason_input = discord.ui.TextInput(
+            label="Describe your request / details",
+            style=discord.TextStyle.paragraph,
+            placeholder="Provide context, application details, or how staff can assist you...",
+            required=True,
+            max_length=1500
+        )
+        self.add_item(self.reason_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        guild, user = interaction.guild, interaction.user
+
+        clean_name = re.sub(r"[^\w-]", "", user.name.lower()) or str(user.id)
+        ticket_ch_name = f"ticket-{self.ticket_type.lower()[:5]}-{clean_name[:15]}"
+        
+        if discord.utils.find(lambda c: c.name == ticket_ch_name, guild.text_channels):
+            return await interaction.followup.send("⚠️ You already have an open ticket of this type.", ephemeral=True)
+
+        category = discord.utils.find(lambda c: "team" in normalize_text(c.name), guild.categories)
+        if not category:
+            category = await guild.create_category(name="Team <3", reason="Auto-created missing Team category")
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, embed_links=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
+        }
+        for rname in RESTRICTED_ADMIN_ROLES:
+            st_role = find_role_resilient(guild, rname)
+            if st_role:
+                overwrites[st_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True)
+
+        try:
+            ch = await guild.create_text_channel(
+                name=ticket_ch_name, 
+                category=category, 
+                overwrites=overwrites, 
+                reason=f"Ticket opened: {self.ticket_type}"
+            )
+            
+            guild_id = guild.id
+            state = bot.server_state.setdefault(guild_id, default_server_state())
+            state["tickets"][str(ch.id)] = {
+                "user_id": user.id, 
+                "type": self.ticket_type,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            await save_state_to_memory(guild, data=state)
+
+            embed = discord.Embed(
+                title=f"🎫 Support Ticket — {self.ticket_type}",
+                description=(
+                    f"Welcome {user.mention}!\n"
+                    f"• **Inquiry Type:** `{self.ticket_type}`\n"
+                    f"• **Details:** *{self.reason_input.value}*\n\n"
+                    "Staff have been notified and will assist you shortly.\n"
+                    "Click **Close Ticket** below when finished."
+                ),
+                color=discord.Color.teal(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed.set_thumbnail(url=user.display_avatar.url)
+            await ch.send(content=f"{user.mention}", embed=embed, view=TicketControlsView())
+            await interaction.followup.send(f"✅ Ticket created successfully: {ch.mention}", ephemeral=True)
+        except Exception as e:
+            await log_bot_error(guild, "TicketModalSubmit", str(e))
+            await interaction.followup.send(f"❌ Could not create ticket channel: `{e}`", ephemeral=True)
+
+class TicketSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Team Apply", emoji="🛡️", description="Apply to join the Chill-Verse staff team"),
+            discord.SelectOption(label="Create Ticket", emoji="📩", description="Open a general support ticket"),
+            discord.SelectOption(label="Need Help", emoji="🆘", description="Report an issue or request immediate assistance")
+        ]
+        super().__init__(placeholder="Select an inquiry type to open a ticket...", min_values=1, max_values=1, custom_id="sel_ticket_options", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(TicketModal(self.values[0]))
+
+class TicketLaunchView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(TicketSelect())
+
 class TicketControlsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -811,54 +998,11 @@ class TicketControlsView(discord.ui.View):
         await asyncio.sleep(5)
         try:
             await interaction.channel.delete(reason=f"Closed by {interaction.user}")
-        except (discord.Forbidden, discord.HTTPException):
+        except Exception:
             pass
 
-class TicketLaunchView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Open Ticket", style=discord.ButtonStyle.success, emoji="📩", custom_id="btn_ticket_open")
-    async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        guild, user = interaction.guild, interaction.user
-
-        clean_name = re.sub(r"[^\w-]", "", user.name.lower()) or str(user.id)
-        ticket_ch_name = f"ticket-{clean_name[:20]}"
-        if discord.utils.find(lambda c: c.name == ticket_ch_name, guild.text_channels):
-            return await interaction.followup.send("⚠️ You already have an open support ticket.", ephemeral=True)
-
-        category = discord.utils.find(lambda c: "team" in normalize_text(c.name), guild.categories)
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, embed_links=True),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
-        }
-        for rname in RESTRICTED_ADMIN_ROLES:
-            st_role = find_role_resilient(guild, rname)
-            if st_role:
-                overwrites[st_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True)
-
-        try:
-            ch = await guild.create_text_channel(name=ticket_ch_name, category=category, overwrites=overwrites, reason="Support ticket open")
-            
-            guild_id = guild.id
-            state = bot.server_state.setdefault(guild_id, default_server_state())
-            state["tickets"][str(ch.id)] = {"user_id": user.id, "created_at": datetime.now(timezone.utc).isoformat()}
-            await save_state_to_memory(guild, data=state)
-
-            embed = discord.Embed(
-                title="🎫 Support Portal",
-                description=f"Welcome {user.mention}! Staff will assist you shortly.\nClick **Close Ticket** below when finished.",
-                color=discord.Color.teal()
-            )
-            await ch.send(content=f"{user.mention}", embed=embed, view=TicketControlsView())
-            await interaction.followup.send(f"✅ Ticket created: {ch.mention}", ephemeral=True)
-        except (discord.Forbidden, discord.HTTPException):
-            await interaction.followup.send("❌ Could not create ticket channel.", ephemeral=True)
-
 # ==============================================================================
-# 7. BOT CLIENT SETUP & AUTOMATED LOOPS
+# 8. BOT CLIENT SETUP & SYSTEM HEALTH AUDIT
 # ==============================================================================
 
 class ChillVerseBot(commands.Bot):
@@ -913,7 +1057,7 @@ class ChillVerseBot(commands.Bot):
                         embed.set_thumbnail(url=member.display_avatar.url)
                         try:
                             await bday_ch.send(content=f"🎉 {member.mention}", embed=embed)
-                        except (discord.Forbidden, discord.HTTPException):
+                        except Exception:
                             pass
 
     @daily_birthday_check.before_loop
@@ -921,6 +1065,36 @@ class ChillVerseBot(commands.Bot):
         await self.wait_until_ready()
 
 bot = ChillVerseBot()
+
+async def run_system_health_audit(guild: discord.Guild):
+    missing_roles = []
+    for rname in list(ROLE_PERMISSIONS_CONFIG.keys()):
+        if not find_role_resilient(guild, rname):
+            missing_roles.append(rname)
+
+    missing_channels = []
+    for cat in EXTENDED_SERVER_BLUEPRINT:
+        for ch in cat["channels"]:
+            if not discord.utils.find(lambda c: normalize_text(c.name) == normalize_text(ch["name"]), guild.text_channels + guild.voice_channels):
+                missing_channels.append(ch["name"])
+
+    error_ch = discord.utils.find(lambda c: "bot-errors" in normalize_text(c.name), guild.text_channels)
+    if error_ch:
+        embed = discord.Embed(
+            title="🔍 System Boot Audit Completed",
+            description=(
+                f"✅ Bot initialized successfully on **{guild.name}**.\n"
+                f"• **Database Records Loaded:** `{len(bot.server_state.get(guild.id, {}).get('user_xp', {}))}` user profiles\n"
+                f"• **Missing Roles Detected:** `{len(missing_roles)}` `(Run .autorole_setup if needed)`\n"
+                f"• **Missing Channels Detected:** `{len(missing_channels)}` `(Run .setup_channels if needed)`"
+            ),
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        try:
+            await error_ch.send(embed=embed)
+        except Exception:
+            pass
 
 def is_staff_or_admin():
     async def predicate(ctx: commands.Context) -> bool:
@@ -932,31 +1106,59 @@ def is_team_channel():
         if not ctx.guild:
             return False
         in_team_cat = ctx.channel.category and "team" in normalize_text(ctx.channel.category.name)
-        in_team_ch = "team" in normalize_text(ctx.channel.name) or "bump" in normalize_text(ctx.channel.name)
+        in_team_ch = "team" in normalize_text(ctx.channel.name) or "bump" in normalize_text(ctx.channel.name) or "bot-commands" in normalize_text(ctx.channel.name)
         if in_team_cat or in_team_ch:
             return True
         try:
             await ctx.message.delete()
-        except (discord.Forbidden, discord.HTTPException):
+        except Exception:
             pass
-        await ctx.send("❌ This command can only be used inside **`Team <3`** channels.", delete_after=5)
+        await ctx.send("❌ This command can only be used inside **`Team <3`** or **`Admin Area`** channels.", delete_after=5)
+        return False
+    return commands.check(predicate)
+
+def is_bump_channel():
+    async def predicate(ctx: commands.Context) -> bool:
+        if not ctx.guild:
+            return False
+        if "bump" in normalize_text(ctx.channel.name):
+            return True
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+        await ctx.send("❌ This command can only be used inside a **`bump`** channel.", delete_after=5)
+        return False
+    return commands.check(predicate)
+
+def is_ticket_channel():
+    async def predicate(ctx: commands.Context) -> bool:
+        if not ctx.guild:
+            return False
+        if "ticket" in normalize_text(ctx.channel.name):
+            return True
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+        await ctx.send("❌ This command can only be used inside a **`tickets`** channel.", delete_after=5)
         return False
     return commands.check(predicate)
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: commands.CommandError):
-    if isinstance(error, commands.CheckFailure):
+    if isinstance(error, (commands.CheckFailure, commands.CommandNotFound)):
         return
-    if isinstance(error, commands.CommandNotFound):
-        return
+    tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
     print(f"❌ Command Error [{ctx.command}]: {error}")
+    await log_bot_error(ctx.guild, f"Command: {ctx.command}", tb)
     try:
         await ctx.send(f"⚠️ Error executing command: `{error}`", delete_after=10)
     except Exception:
         pass
 
 # ==============================================================================
-# 8. BUMP SCHEDULER & LISTENERS
+# 9. BUMP SCHEDULER & LISTENERS
 # ==============================================================================
 
 async def schedule_bump_reminder(guild: discord.Guild, channel: Optional[discord.TextChannel] = None):
@@ -982,7 +1184,7 @@ async def schedule_bump_reminder(guild: discord.Guild, channel: Optional[discord
                 ping = role.mention if role else "@here"
                 embed = discord.Embed(
                     title="⏰ Time to Bump!",
-                    description="The 2-hour cooldown has passed. Run `/bump` or `.bump` to grow the server! 🚀",
+                    description="The 2-hour cooldown has passed. Run `.bump` to grow the server! 🚀",
                     color=discord.Color.gold(),
                     timestamp=discord.utils.utcnow()
                 )
@@ -1008,6 +1210,8 @@ async def on_ready():
             if not member.bot:
                 await verify_member_tenure(member)
 
+        await run_system_health_audit(guild)
+
 @bot.event
 async def on_member_join(member: discord.Member):
     if member.bot:
@@ -1016,7 +1220,7 @@ async def on_member_join(member: discord.Member):
     if newbie_role and member.guild.me.top_role > newbie_role:
         try:
             await member.add_roles(newbie_role, reason="Auto-assign on onboarding")
-        except (discord.Forbidden, discord.HTTPException):
+        except Exception:
             pass
 
     welcome_ch = discord.utils.find(lambda c: "welcome" in normalize_text(c.name), member.guild.text_channels)
@@ -1031,7 +1235,7 @@ async def on_member_join(member: discord.Member):
         embed.set_footer(text=f"Member #{len(member.guild.members)}")
         try:
             await welcome_ch.send(content=f"Welcome {member.mention}!", embed=embed)
-        except (discord.Forbidden, discord.HTTPException):
+        except Exception:
             pass
 
 @bot.event
@@ -1041,7 +1245,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         if booster_role and booster_role not in after.roles and after.guild.me.top_role > booster_role:
             try:
                 await after.add_roles(booster_role, reason="Server boost perk")
-            except (discord.Forbidden, discord.HTTPException):
+            except Exception:
                 pass
 
         await add_xp(after, 1500, bypass_cooldown=True)
@@ -1056,107 +1260,113 @@ async def on_member_update(before: discord.Member, after: discord.Member):
             embed.set_thumbnail(url=after.display_avatar.url)
             try:
                 await ann_ch.send(content=f"🎉 {after.mention}", embed=embed)
-            except (discord.Forbidden, discord.HTTPException):
+            except Exception:
                 pass
 
 @bot.event
 async def on_message(message: discord.Message):
-    if message.author.bot or not message.guild:
-        if message.guild and (message.author.id == 302050872383242240 or (message.author.bot and "bump" in message.content.lower())):
-            success = "bump done" in message.content.lower()
-            if not success and message.embeds:
-                for emb in message.embeds:
-                    desc = emb.description or ""
-                    if "bump done" in desc.lower() or "thumbsup" in desc.lower():
-                        success = True
-                        break
-            if success:
-                state = bot.server_state.setdefault(message.guild.id, default_server_state())
-                state["last_bump_time"] = time.time()
-                await save_state_to_memory(message.guild, data=state)
+    try:
+        if message.author.bot or not message.guild:
+            if message.guild and (message.author.id == 302050872383242240 or (message.author.bot and "bump" in message.content.lower())):
+                success = "bump done" in message.content.lower()
+                if not success and message.embeds:
+                    for emb in message.embeds:
+                        desc = emb.description or ""
+                        if "bump done" in desc.lower() or "thumbsup" in desc.lower():
+                            success = True
+                            break
+                if success:
+                    state = bot.server_state.setdefault(message.guild.id, default_server_state())
+                    state["last_bump_time"] = time.time()
+                    await save_state_to_memory(message.guild, data=state)
+                    try:
+                        await message.channel.send("🚀 **Bump detected!** Next bump alert scheduled in 2 hours.", delete_after=10)
+                    except Exception:
+                        pass
+                    await schedule_bump_reminder(message.guild, message.channel)
+            return
+
+        if await run_automod_check(message):
+            return
+
+        guild_id = message.guild.id
+        state = bot.server_state.setdefault(guild_id, default_server_state())
+
+        if state.get("maintenance_mode", False) and not is_staff_member(message.author):
+            if message.content.startswith("."):
+                await message.channel.send("🚧 **Server is currently in Maintenance Mode.** Commands are restricted to staff.", delete_after=6)
+            return
+
+        user_str = str(message.author.id)
+        if user_str in state["afk_users"]:
+            afk_entry = state["afk_users"].pop(user_str, {})
+            spent_time = int((time.time() - afk_entry.get("timestamp", time.time())) // 60)
+            spent_str = f"{spent_time} minute(s)" if spent_time > 0 else "a few seconds"
+            mood = afk_entry.get("mood", "neutral")
+
+            if mood == "sad":
+                greet = f"🤍 Welcome back {message.author.mention}! We hope your day is getting brighter. I've cleared your AFK. *(Away for {spent_str})*"
+            elif mood == "happy":
+                greet = f"🎉 Welcome back {message.author.mention}! Hope you had a fantastic time! I've cleared your AFK. *(Away for {spent_str})* 😊"
+            else:
+                greet = f"👋 Welcome back {message.author.mention}! I've removed your AFK. *(Away for {spent_str})*"
+
+            await message.channel.send(greet, delete_after=10)
+            await save_state_to_memory(message.guild, data=state)
+
+        if message.mentions:
+            for member in message.mentions:
+                m_str = str(member.id)
+                if m_str in state["afk_users"] and member.id != message.author.id:
+                    rec = state["afk_users"][m_str]
+                    mins = int((time.time() - rec["timestamp"]) // 60)
+                    t_str = f"{mins}m ago" if mins > 0 else "just now"
+                    m_mood = rec.get("mood", "neutral")
+
+                    if m_mood == "sad":
+                        note = f"🥺 **{member.display_name}** is AFK feeling down: *{rec['reason']}* `({t_str})` 💔"
+                    elif m_mood == "happy":
+                        note = f"✨ **{member.display_name}** is AFK vibing: *{rec['reason']}* `({t_str})` 😊"
+                    else:
+                        note = f"💤 **{member.display_name}** is AFK: *{rec['reason']}* `({t_str})`"
+
+                    await message.channel.send(note, delete_after=10)
+
+        ch_name = normalize_text(message.channel.name)
+        if "vouch" in ch_name:
+            try:
+                await message.add_reaction("⭐")
+            except Exception:
+                pass
+        elif "memes" in ch_name or "selfies" in ch_name or "photography" in ch_name:
+            if message.attachments or "http" in message.content:
                 try:
-                    await message.channel.send("🚀 **Bump detected!** Next bump alert scheduled in 2 hours.", delete_after=10)
-                except (discord.Forbidden, discord.HTTPException):
+                    await message.add_reaction("❤️")
+                    await message.add_reaction("🔥")
+                except Exception:
                     pass
-                await schedule_bump_reminder(message.guild, message.channel)
-        return
+        elif "discussions" in ch_name and not isinstance(message.channel, discord.Thread):
+            if message.type == discord.MessageType.default:
+                try:
+                    thread_title = message.content[:40] if message.content else f"Discussion by {message.author.name}"
+                    await message.create_thread(name=f"💬・{thread_title}")
+                except Exception:
+                    pass
 
-    guild_id = message.guild.id
-    state = bot.server_state.setdefault(guild_id, default_server_state())
-
-    if state.get("maintenance_mode", False) and not is_staff_member(message.author):
-        if message.content.startswith("."):
-            await message.channel.send("🚧 **Server is currently in Maintenance Mode.** Commands are restricted to staff.", delete_after=6)
-        return
-
-    user_str = str(message.author.id)
-    if user_str in state["afk_users"]:
-        afk_entry = state["afk_users"].pop(user_str, {})
-        spent_time = int((time.time() - afk_entry.get("timestamp", time.time())) // 60)
-        spent_str = f"{spent_time} minute(s)" if spent_time > 0 else "a few seconds"
-        mood = afk_entry.get("mood", "neutral")
-
-        if mood == "sad":
-            greet = f"🤍 Welcome back {message.author.mention}! We hope your day is getting brighter. I've cleared your AFK. *(Away for {spent_str})*"
-        elif mood == "happy":
-            greet = f"🎉 Welcome back {message.author.mention}! Hope you had a fantastic time! I've cleared your AFK. *(Away for {spent_str})* 😊"
-        else:
-            greet = f"👋 Welcome back {message.author.mention}! I've removed your AFK. *(Away for {spent_str})*"
-
-        await message.channel.send(greet, delete_after=10)
-        await save_state_to_memory(message.guild, data=state)
-
-    if message.mentions:
-        for member in message.mentions:
-            m_str = str(member.id)
-            if m_str in state["afk_users"] and member.id != message.author.id:
-                rec = state["afk_users"][m_str]
-                mins = int((time.time() - rec["timestamp"]) // 60)
-                t_str = f"{mins}m ago" if mins > 0 else "just now"
-                m_mood = rec.get("mood", "neutral")
-
-                if m_mood == "sad":
-                    note = f"🥺 **{member.display_name}** is AFK feeling down: *{rec['reason']}* `({t_str})` 💔"
-                elif m_mood == "happy":
-                    note = f"✨ **{member.display_name}** is AFK vibing: *{rec['reason']}* `({t_str})` 😊"
-                else:
-                    note = f"💤 **{member.display_name}** is AFK: *{rec['reason']}* `({t_str})`"
-
-                await message.channel.send(note, delete_after=10)
-
-    ch_name = normalize_text(message.channel.name)
-    if "vouch" in ch_name:
-        try:
-            await message.add_reaction("⭐")
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-    elif "memes" in ch_name or "selfies" in ch_name or "photography" in ch_name:
-        if message.attachments or "http" in message.content:
-            try:
-                await message.add_reaction("❤️")
-                await message.add_reaction("🔥")
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-    elif "discussions" in ch_name and not isinstance(message.channel, discord.Thread):
-        if message.type == discord.MessageType.default:
-            try:
-                thread_title = message.content[:40] if message.content else f"Discussion by {message.author.name}"
-                await message.create_thread(name=f"💬・{thread_title}")
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-
-    await add_xp(message.author, 15)
-    await bot.process_commands(message)
+        await add_xp(message.author, 15)
+        await bot.process_commands(message)
+    except Exception as e:
+        await log_bot_error(message.guild, "OnMessageEvent", str(e))
 
 # ==============================================================================
-# 9. USER, LEVEL & COMMUNITY COMMANDS
+# 10. USER, LEVEL & COMMUNITY COMMANDS
 # ==============================================================================
 
 @bot.command(name="afk")
 async def cmd_afk(ctx: commands.Context, *, reason: str = "AFK"):
     try:
         await ctx.message.delete(delay=10)
-    except (discord.Forbidden, discord.HTTPException):
+    except Exception:
         pass
 
     state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
@@ -1197,10 +1407,11 @@ async def cmd_afk(ctx: commands.Context, *, reason: str = "AFK"):
     await ctx.send(embed=embed, delete_after=10)
 
 @bot.command(name="bump")
+@is_bump_channel()
 async def cmd_bump(ctx: commands.Context):
     try:
         await ctx.message.delete(delay=10)
-    except (discord.Forbidden, discord.HTTPException):
+    except Exception:
         pass
 
     state = bot.server_state.setdefault(ctx.guild.id, default_server_state())
@@ -1254,7 +1465,7 @@ async def cmd_bumptimer(ctx: commands.Context):
 async def cmd_confess(ctx: commands.Context):
     try:
         await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
+    except Exception:
         pass
     
     class ConfessTriggerView(discord.ui.View):
@@ -1350,7 +1561,7 @@ async def cmd_leaderboard(ctx: commands.Context):
 async def cmd_poll(ctx: commands.Context, *, question: str):
     try:
         await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
+    except Exception:
         pass
 
     poll_ch = discord.utils.find(lambda c: "daily-polls" in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
@@ -1373,7 +1584,7 @@ async def cmd_poll(ctx: commands.Context, *, question: str):
 async def cmd_botlist(ctx: commands.Context):
     try:
         await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
+    except Exception:
         pass
 
     embed = discord.Embed(
@@ -1441,11 +1652,11 @@ async def cmd_botlist(ctx: commands.Context):
         ),
         inline=False
     )
-    embed.set_footer(text="Restricted exclusively to Team <3 channels.")
+    embed.set_footer(text="Restricted exclusively to Team <3 / Admin channels.")
     await ctx.send(embed=embed)
 
 # ==============================================================================
-# 10. MODERATION & MAINTENANCE COMMANDS
+# 11. MODERATION & MAINTENANCE COMMANDS
 # ==============================================================================
 
 @bot.command(name="maintenance")
@@ -1568,7 +1779,7 @@ async def cmd_purge(ctx: commands.Context, amount: int):
     if not (is_owner or ctx.author.guild_permissions.administrator or not user_roles.isdisjoint(allowed_roles)):
         try:
             await ctx.message.delete()
-        except (discord.Forbidden, discord.HTTPException):
+        except Exception:
             pass
         return await ctx.send("❌ This command is restricted to the **Server Owner**, **Admins**, and **Authorities** only.", delete_after=6)
 
@@ -1577,14 +1788,14 @@ async def cmd_purge(ctx: commands.Context, amount: int):
         
     try:
         await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
+    except Exception:
         pass
         
     deleted = await ctx.channel.purge(limit=amount)
     await ctx.send(f"🧹 Purged **{len(deleted)}** message(s).", delete_after=5)
 
 # ==============================================================================
-# 11. DEPLOYMENT, SAFE CHANNELS & ROLE MANAGEMENT
+# 12. DEPLOYMENT, SAFE CHANNELS & ROLE MANAGEMENT
 # ==============================================================================
 
 @bot.command(name="syncperms")
@@ -1782,7 +1993,7 @@ async def cmd_communitypanel(ctx: commands.Context):
     await ctx.send(embed=embed, view=CommunityRolesView())
     try:
         await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
+    except Exception:
         pass
 
 @bot.command(name="postcolors")
@@ -1797,7 +2008,7 @@ async def cmd_postcolors(ctx: commands.Context):
     await ch.send(embed=embed, view=ColorView())
     try:
         await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
+    except Exception:
         pass
 
 @bot.command(name="postgender")
@@ -1811,22 +2022,29 @@ async def cmd_postgender(ctx: commands.Context):
     await ctx.send(embed=embed, view=GenderView())
     try:
         await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
+    except Exception:
         pass
 
 @bot.command(name="posttickets")
 @commands.has_permissions(administrator=True)
+@is_ticket_channel()
 async def cmd_posttickets(ctx: commands.Context):
-    ch = discord.utils.find(lambda c: "tickets" in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
     embed = discord.Embed(
-        title="🎫 Server Support & Assistance",
-        description="Need assistance or have a server inquiry?\nClick the button below to open a private ticket with staff.",
+        title="🎫 Chill-Verse Support & Application Portal",
+        description=(
+            "Need assistance, want to report an issue, or looking to join the staff team?\n\n"
+            "Select an option from the dropdown menu below to open your private ticket:\n\n"
+            "🛡️ **Team Apply** — Submit a staff application\n"
+            "📩 **Create Ticket** — General inquiries & support\n"
+            "🆘 **Need Help** — Urgent assistance or reports"
+        ),
         color=discord.Color.teal()
     )
-    await ch.send(embed=embed, view=TicketLaunchView())
+    embed.set_footer(text="Confidential • Only staff and you can view your tickets.")
+    await ctx.send(embed=embed, view=TicketLaunchView())
     try:
         await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
+    except Exception:
         pass
 
 @bot.command(name="confesspanel", aliases=["postconfession"])
@@ -1842,7 +2060,7 @@ async def cmd_confesspanel(ctx: commands.Context):
     await ch.send(embed=embed, view=ConfessionPanelView())
     try:
         await ctx.message.delete()
-    except (discord.Forbidden, discord.HTTPException):
+    except Exception:
         pass
 
 @bot.command(name="backup")
@@ -1897,7 +2115,7 @@ async def cmd_restorebackup(ctx: commands.Context):
     await status.edit(content=None, embed=embed)
 
 # ==============================================================================
-# 12. APPLICATION ENTRY POINT
+# 13. APPLICATION ENTRY POINT
 # ==============================================================================
 
 if __name__ == "__main__":
@@ -1906,3 +2124,4 @@ if __name__ == "__main__":
         print("❌ CRITICAL: DISCORD_TOKEN environment variable is not set!")
     else:
         bot.run(TOKEN)
+        
