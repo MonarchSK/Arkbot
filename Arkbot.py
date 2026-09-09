@@ -5,6 +5,7 @@ import datetime
 import json
 import io
 import asyncio
+import os
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -260,7 +261,7 @@ async def delete_channels(ctx, *channels: discord.abc.GuildChannel):
         try:
             await channel.delete(reason=f"Batch manual deletion requested by {ctx.author}")
             deleted_count += 1
-            await asyncio.sleep(0.35) # Avoid rate limits
+            await asyncio.sleep(0.35)
         except Exception:
             failed_count += 1
 
