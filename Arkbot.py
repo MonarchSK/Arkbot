@@ -13,7 +13,6 @@ from discord.ext import commands
 # 1. SERVER ROLES & PERMISSION MATRIX CONFIGURATION
 # ==============================================================================
 
-# Staff Hierarchy (Highness is Sole Administrator; Plain 'Admin' Excluded)
 ADMIN_ROLE_NAME     = "୨୧ Highness ☕⸝⸝﹗"
 AUTHORITY_ROLE_NAME = "·.✦Authority✦.·"
 HEAD_MOD_ROLE_NAME  = "✦•┈๑⋅⋯Head Moderator⋯⋅๑┈•✦"
@@ -30,7 +29,6 @@ RESTRICTED_ADMIN_ROLES = [
     TEAM_ROLE_NAME
 ]
 
-# Milestones, Identity & Community Roles
 OG_ROLE_NAME        = "★.  𝓸𝓰  .★  ˚  ✦  .  ⑅  ."
 VETERAN_ROLE_NAME   = "୨ৎ ˖ Veteran"
 BOOSTER_ROLE_NAME   = "꒰ . 𖦹 𝖘𝖊𝖗𝖛𝖊𝖗 𝖇𝖔𝖔𝖘𝖙𝖊𝖗 .ᐟ 𖦹 . ꒱"
@@ -54,7 +52,6 @@ PRO_HEX_COLORS = {
     "Pro Hex Green":  discord.Color.green()
 }
 
-# Cumulative Level Progression Tiers & Permissions
 LEVEL_TIER_ROLES = {
     (1, 9): {
         "name": "୨୧Newbie୨୧",
@@ -141,7 +138,6 @@ LEVEL_TIER_ROLES = {
     }
 }
 
-# Granular Staff Permission Matrix
 ROLE_PERMISSIONS_CONFIG = {
     ADMIN_ROLE_NAME: {
         "hoist": True,
@@ -306,7 +302,6 @@ LEGACY_ROLE_MIGRATION = {
 # ==============================================================================
 
 def normalize_text(text: str) -> str:
-    """Strips zero-width characters, normalizes Unicode glyphs, and squashes whitespace."""
     if not text:
         return ""
     text = re.sub(r"[\u200B-\u200D\uFEFF\u200E\u200F]", "", text)
@@ -314,12 +309,10 @@ def normalize_text(text: str) -> str:
     return " ".join(text.split()).strip().lower()
 
 def clean_slug(name: str) -> str:
-    """Strips punctuation and emojis to create a match slug for channel comparisons."""
     cleaned = re.sub(r"[^\w\s]", "", name)
     return " ".join(cleaned.split()).strip().lower()
 
 def find_role_resilient(guild: discord.Guild, target_name: str) -> Optional[discord.Role]:
-    """Finds a role by fuzzy-matching normalized Unicode strings."""
     clean_target = normalize_text(target_name)
     for role in guild.roles:
         if normalize_text(role.name) == clean_target:
@@ -334,7 +327,6 @@ async def ensure_role_exists(
     hoist: bool = False,
     mentionable: bool = False
 ) -> Optional[discord.Role]:
-    """Safely retrieves or provisions server roles within bot hierarchy limits."""
     role = find_role_resilient(guild, name)
     if not role:
         if not guild.me.guild_permissions.manage_roles:
@@ -530,7 +522,6 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
 xp_cooldowns: Dict[int, float] = {}
 
 async def verify_member_tenure(member: discord.Member):
-    """Safely audits member join age against the 365-day milestone and awards Veteran roles."""
     if not member.joined_at or member.bot:
         return
     now = datetime.now(timezone.utc)
@@ -557,7 +548,6 @@ async def verify_member_tenure(member: discord.Member):
                 pass
 
 async def sync_member_level_tier(member: discord.Member, new_level: int):
-    """Swaps level tier roles cleanly while protecting vanity and staff tags."""
     guild = member.guild
     target_tier_data = None
     for (min_lvl, max_lvl), config in LEVEL_TIER_ROLES.items():
@@ -594,7 +584,6 @@ async def sync_member_level_tier(member: discord.Member, new_level: int):
         pass
 
 async def add_xp(member: discord.Member, xp_amount: int, bypass_cooldown: bool = False):
-    """Awards experience points, checks promotion boundaries, and dispatches notices."""
     if member.bot or not member.guild:
         return
 
@@ -836,6 +825,22 @@ def is_staff_or_admin():
         return not user_roles.isdisjoint(allowed)
     return commands.check(predicate)
 
+def is_team_channel():
+    async def predicate(ctx: commands.Context) -> bool:
+        if not ctx.guild:
+            return False
+        in_team_cat = ctx.channel.category and "team" in normalize_text(ctx.channel.category.name)
+        in_team_ch = "team" in normalize_text(ctx.channel.name) or "bump" in normalize_text(ctx.channel.name)
+        if in_team_cat or in_team_ch:
+            return True
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        await ctx.send("❌ This command can only be used inside **`Team <3`** channels.", delete_after=5)
+        return False
+    return commands.check(predicate)
+
 # ==============================================================================
 # 9. LISTENERS (AFK, BUMP, BOOSTS, EXP, AUTO-REACTIONS, THREADS)
 # ==============================================================================
@@ -890,7 +895,6 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
-        # Disboard Automated Detection
         if message.author.id == 302050872383242240 or (message.author.bot and "bump" in message.content.lower()):
             success = "bump done" in message.content.lower()
             if not success and message.embeds:
@@ -908,13 +912,11 @@ async def on_message(message: discord.Message):
     afk_data = bot.server_state.get(guild_id, {}).get("afk", {})
     user_str = str(message.author.id)
 
-    # Return from AFK (10s auto-delete)
     if user_str in afk_data:
         del afk_data[user_str]
         await message.channel.send(f"👋 Welcome back {message.author.mention}, I removed your AFK.", delete_after=10)
         await save_state_to_memory(message.guild, data=bot.server_state[guild_id])
 
-    # Mentioned while AFK (10s auto-delete)
     if message.mentions:
         for member in message.mentions:
             m_str = str(member.id)
@@ -924,7 +926,6 @@ async def on_message(message: discord.Message):
                 t_str = f"{mins}m ago" if mins > 0 else "just now"
                 await message.channel.send(f"💤 **{member.display_name}** is AFK: {rec['reason']} *({t_str})*", delete_after=10)
 
-    # Automated Channel Workflows (Reactions & Auto-Threads)
     ch_name = normalize_text(message.channel.name)
     if "vouch" in ch_name:
         try:
@@ -946,7 +947,6 @@ async def on_message(message: discord.Message):
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-    # Award Standard Chat XP
     await add_xp(message.author, 15)
     await bot.process_commands(message)
 
@@ -968,7 +968,6 @@ async def bump_reminder_task(guild: discord.Guild, channel: discord.TextChannel)
 
 @bot.command(name="afk")
 async def cmd_afk(ctx: commands.Context, *, reason: str = "AFK"):
-    """Sets user AFK status. Both command and reply auto-delete in 10s."""
     try:
         await ctx.message.delete(delay=10)
     except (discord.Forbidden, discord.HTTPException):
@@ -985,7 +984,6 @@ async def cmd_afk(ctx: commands.Context, *, reason: str = "AFK"):
 
 @bot.command(name="bump")
 async def cmd_bump(ctx: commands.Context):
-    """Registers bump manually. Both command and reply auto-delete in 10s."""
     try:
         await ctx.message.delete(delay=10)
     except (discord.Forbidden, discord.HTTPException):
@@ -997,7 +995,6 @@ async def cmd_bump(ctx: commands.Context):
 
 @bot.command(name="confess")
 async def cmd_confess(ctx: commands.Context, *, confession_text: str):
-    """Posts an anonymous confession into 🚦confession-🖇 and purges command trigger."""
     try:
         await ctx.message.delete()
     except (discord.Forbidden, discord.HTTPException):
@@ -1030,7 +1027,6 @@ async def cmd_confess(ctx: commands.Context, *, confession_text: str):
 
 @bot.command(name="rank", aliases=["level", "xp"])
 async def cmd_rank(ctx: commands.Context, member: Optional[discord.Member] = None):
-    """Displays user level, current XP, and progression to the next tier."""
     target = member or ctx.author
     guild_id = ctx.guild.id
     users_db = bot.server_state.get(guild_id, {}).get("users", {})
@@ -1051,7 +1047,6 @@ async def cmd_rank(ctx: commands.Context, member: Optional[discord.Member] = Non
 
 @bot.command(name="leaderboard", aliases=["lb", "top"])
 async def cmd_leaderboard(ctx: commands.Context):
-    """Displays the top 10 most active members by total XP."""
     guild_id = ctx.guild.id
     users_db = bot.server_state.get(guild_id, {}).get("users", {})
     if not users_db:
@@ -1075,7 +1070,6 @@ async def cmd_leaderboard(ctx: commands.Context):
 @bot.command(name="poll")
 @is_staff_or_admin()
 async def cmd_poll(ctx: commands.Context, *, question: str):
-    """Sends official poll to 🖇-daily-polls and pings ✟ PollPings."""
     try:
         await ctx.message.delete()
     except (discord.Forbidden, discord.HTTPException):
@@ -1096,6 +1090,73 @@ async def cmd_poll(ctx: commands.Context, *, question: str):
     await msg.add_reaction("👍")
     await msg.add_reaction("👎")
 
+@bot.command(name="botlist", aliases=["botcommands"])
+@is_team_channel()
+async def cmd_botlist(ctx: commands.Context):
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+    embed = discord.Embed(
+        title="🤖 Chill-Verse Complete Command Matrix",
+        description="Comprehensive catalog of all administrative, staff, and public user commands:",
+        color=discord.Color.teal(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(
+        name="🏗️ Setup & Infrastructure",
+        value=(
+            "• `.setup_channels` — Deploys stylized architecture & purges legacy channels\n"
+            "• `.syncperms` — Enforces staff and tier permission matrices\n"
+            "• `.autorole_setup` — Provisions all server roles and cosmetic tiers"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🎨 Panels & UI Management",
+        value=(
+            "• `.communitypanel` — Spawns PollPings and Roblox role picker\n"
+            "• `.postcolors` — Spawns the chat color selection dropdown\n"
+            "• `.postgender` — Spawns the identity role dropdown\n"
+            "• `.posttickets` — Spawns the support ticket launcher"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🛡️ Moderation Suite",
+        value=(
+            "• `.kick <member>` — Kicks a user from the server\n"
+            "• `.ban <member>` — Bans a user from the server\n"
+            "• `.timeout <member> <mins>` — Mutes a user temporarily\n"
+            "• `.purge <amount>` — Clears up to 100 messages"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🎮 Public & Community Features",
+        value=(
+            "• `.rank` — Displays user level, XP progress, and card\n"
+            "• `.leaderboard` — Shows top 10 most active members by XP\n"
+            "• `.afk <reason>` — Sets AFK status with auto-removal and alerts\n"
+            "• `.bump` — Logs manual server bump and 2-hour reminder timer\n"
+            "• `.confess <msg>` — Posts secure anonymous confession\n"
+            "• `.poll <question>` — Dispatches an official server poll"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="📦 System & Backup",
+        value=(
+            "• `.backup` — Commits server state snapshot to `#bot-memory`\n"
+            "• `.restorebackup` — Synchronizes state from `#bot-memory`\n"
+            "• `.removeadminrole` — Migrates legacy Admin holders to Highness"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="Restricted exclusively to Team <3 channels.")
+    await ctx.send(embed=embed)
+
 # ==============================================================================
 # 11. MODERATION SUITE
 # ==============================================================================
@@ -1103,7 +1164,6 @@ async def cmd_poll(ctx: commands.Context, *, question: str):
 @bot.command(name="kick")
 @commands.has_permissions(kick_members=True)
 async def cmd_kick(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided"):
-    """Kicks a member from the server."""
     if ctx.author.top_role <= member.top_role or member.id == ctx.guild.owner_id:
         return await ctx.send("❌ You cannot kick a member with equal or higher authority.")
     if ctx.guild.me.top_role <= member.top_role:
@@ -1117,7 +1177,6 @@ async def cmd_kick(ctx: commands.Context, member: discord.Member, *, reason: str
 @bot.command(name="ban")
 @commands.has_permissions(ban_members=True)
 async def cmd_ban(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided"):
-    """Bans a member from the server."""
     if ctx.author.top_role <= member.top_role or member.id == ctx.guild.owner_id:
         return await ctx.send("❌ You cannot ban a member with equal or higher authority.")
     if ctx.guild.me.top_role <= member.top_role:
@@ -1131,7 +1190,6 @@ async def cmd_ban(ctx: commands.Context, member: discord.Member, *, reason: str 
 @bot.command(name="timeout", aliases=["mute"])
 @commands.has_permissions(moderate_members=True)
 async def cmd_timeout(ctx: commands.Context, member: discord.Member, minutes: int, *, reason: str = "No reason provided"):
-    """Times out a member for a specified number of minutes."""
     if ctx.author.top_role <= member.top_role or member.id == ctx.guild.owner_id:
         return await ctx.send("❌ You cannot moderate a member with equal or higher authority.")
     if ctx.guild.me.top_role <= member.top_role:
@@ -1146,7 +1204,6 @@ async def cmd_timeout(ctx: commands.Context, member: discord.Member, minutes: in
 @bot.command(name="purge", aliases=["clear"])
 @commands.has_permissions(manage_messages=True)
 async def cmd_purge(ctx: commands.Context, amount: int):
-    """Purges a specified number of messages from chat."""
     if amount < 1 or amount > 100:
         return await ctx.send("⚠️ Specify an amount between 1 and 100 messages.", delete_after=5)
     await ctx.message.delete()
@@ -1160,12 +1217,10 @@ async def cmd_purge(ctx: commands.Context, amount: int):
 @bot.command(name="syncperms")
 @commands.has_permissions(administrator=True)
 async def cmd_syncperms(ctx: commands.Context):
-    """Audits and synchronizes granular permissions for staff and leveling roles."""
     status = await ctx.send("⏳ **Enforcing server permission hierarchy...**")
     guild = ctx.guild
     updated, failed = [], []
 
-    # Staff Hierarchy
     for rname, cfg in ROLE_PERMISSIONS_CONFIG.items():
         role = find_role_resilient(guild, rname)
         if not role:
@@ -1185,7 +1240,6 @@ async def cmd_syncperms(ctx: commands.Context):
         else:
             failed.append(f"⚠️ `{role.name}` is positioned above the bot")
 
-    # Progression Tier Permissions
     for (low, high), cfg in LEVEL_TIER_ROLES.items():
         role = find_role_resilient(guild, cfg["name"])
         if not role:
@@ -1218,7 +1272,6 @@ async def cmd_syncperms(ctx: commands.Context):
 @bot.command(name="autorole_setup")
 @commands.has_permissions(administrator=True)
 async def cmd_autorole_setup(ctx: commands.Context):
-    """Provisions all progression tiers, identity, milestone, and cosmetic roles."""
     guild = ctx.guild
     msg = await ctx.send("⏳ **Auditing and provisioning all server roles...**")
 
@@ -1246,7 +1299,6 @@ async def cmd_autorole_setup(ctx: commands.Context):
 @bot.command(name="setup_channels")
 @commands.has_permissions(administrator=True)
 async def cmd_setup_channels(ctx: commands.Context):
-    """Builds the stylized channel blueprint, enforces overwrites, and purges legacy channels."""
     guild = ctx.guild
     status = await ctx.send("⏳ **Step 1/3: Deploying new stylized architecture & channel locks...**")
 
@@ -1324,7 +1376,6 @@ async def cmd_setup_channels(ctx: commands.Context):
 @bot.command(name="removeadminrole")
 @commands.has_permissions(administrator=True)
 async def cmd_removeadminrole(ctx: commands.Context):
-    """Migrates holders to Highness and deletes plain 'Admin'."""
     old_role = discord.utils.find(lambda r: normalize_text(r.name) == "admin", ctx.guild.roles)
     highness = find_role_resilient(ctx.guild, ADMIN_ROLE_NAME)
     if not old_role:
@@ -1354,7 +1405,6 @@ async def cmd_removeadminrole(ctx: commands.Context):
 @bot.command(name="communitypanel")
 @commands.has_permissions(administrator=True)
 async def cmd_communitypanel(ctx: commands.Context):
-    """Spawns the PollPings and Roblox self-assignment view."""
     embed = discord.Embed(
         title="✨ Self-Assignable Roles",
         description="Click below to toggle optional notification and community roles:\n\n📊 **Poll Pings** — Server poll alerts\n🎮 **Roblox Members** — Access to Roblox community chat\n\n*Click again to toggle off.*",
@@ -1369,7 +1419,6 @@ async def cmd_communitypanel(ctx: commands.Context):
 @bot.command(name="postcolors")
 @commands.has_permissions(administrator=True)
 async def cmd_postcolors(ctx: commands.Context):
-    """Spawns the cosmetic color selection dropdown in 🎨・colours."""
     ch = discord.utils.find(lambda c: "colours" in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
     embed = discord.Embed(
         title="🎨 Customize Your Name Color",
@@ -1385,7 +1434,6 @@ async def cmd_postcolors(ctx: commands.Context):
 @bot.command(name="postgender")
 @commands.has_permissions(administrator=True)
 async def cmd_postgender(ctx: commands.Context):
-    """Spawns the identity role selection dropdown."""
     embed = discord.Embed(
         title="✨ Identity Roles",
         description="Select your gender identity from the dropdown below to update your profile role.",
@@ -1400,7 +1448,6 @@ async def cmd_postgender(ctx: commands.Context):
 @bot.command(name="posttickets")
 @commands.has_permissions(administrator=True)
 async def cmd_posttickets(ctx: commands.Context):
-    """Spawns the ticket launcher panel in 🎫・tickets."""
     ch = discord.utils.find(lambda c: "tickets" in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
     embed = discord.Embed(
         title="🎫 Server Support & Assistance",
@@ -1416,7 +1463,6 @@ async def cmd_posttickets(ctx: commands.Context):
 @bot.command(name="backup")
 @commands.has_permissions(administrator=True)
 async def cmd_backup(ctx: commands.Context):
-    """Manually commits current server state into #bot-memory."""
     status = await ctx.send("⏳ **Saving snapshot to `#bot-memory`...**")
     guild_id = ctx.guild.id
     if guild_id in bot.server_state:
@@ -1428,7 +1474,6 @@ async def cmd_backup(ctx: commands.Context):
 @bot.command(name="restorebackup")
 @commands.has_permissions(administrator=True)
 async def cmd_restorebackup(ctx: commands.Context):
-    """Manually reads and synchronizes backup state from #bot-memory."""
     status = await ctx.send("⏳ **Restoring state from `#bot-memory`...**")
     data = await load_state_from_memory(ctx.guild)
     if not data:
