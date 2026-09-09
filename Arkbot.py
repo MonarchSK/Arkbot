@@ -10,10 +10,10 @@ import discord
 from discord.ext import commands
 
 # ==============================================================================
-# 1. CORE SERVER ROLES & COSMETIC CONFIGURATION
+# 1. CORE ROLES & PERMISSION MATRIX CONFIGURATION
 # ==============================================================================
 
-# Staff Hierarchy (Highness is Administrator; Plain Admin role excluded)
+# Staff Hierarchy (Highness is Sole Administrator; Plain 'Admin' Excluded)
 ADMIN_ROLE_NAME     = "୨୧ Highness ☕⸝⸝﹗"
 AUTHORITY_ROLE_NAME = "·.✦Authority✦.·"
 HEAD_MOD_ROLE_NAME  = "✦•┈๑⋅⋯Head Moderator⋯⋅๑┈•✦"
@@ -54,7 +54,7 @@ PRO_HEX_COLORS = {
     "Pro Hex Green":  discord.Color.green()
 }
 
-# Cumulative Level Progression Tiers & Special Permissions
+# Cumulative Level Progression Tiers & Special Unlocked Permissions
 LEVEL_TIER_ROLES = {
     (1, 9): {
         "name": "୨୧Newbie୨୧",
@@ -191,7 +191,7 @@ ROLE_PERMISSIONS_CONFIG = {
 }
 
 # ==============================================================================
-# 2. SERVER CHANNEL ARCHITECTURE BLUEPRINT
+# 2. SERVER CHANNEL BLUEPRINT & MIGRATION LOOKUPS
 # ==============================================================================
 
 EXTENDED_SERVER_BLUEPRINT = [
@@ -277,7 +277,7 @@ EXTENDED_SERVER_BLUEPRINT = [
 
 CRITICAL_PROTECTED_CHANNELS = ["bot-memory", "bot_memory", "backup", "audit-log"]
 
-# Legacy Role Normalization & Migration Map
+# Legacy Role Normalization Mapping
 LEGACY_ROLE_MIGRATION = {
     "admin": ADMIN_ROLE_NAME,
     "authority": AUTHORITY_ROLE_NAME,
@@ -293,6 +293,7 @@ LEGACY_ROLE_MIGRATION = {
     "roblox": ROBLOX_ROLE_NAME,
     "male": "Male ★★",
     "female": "Female ★★",
+    "non-binary": "Non-Binary",
     "newbie": "୨୧Newbie୨୧",
     "explorer": "୨ৎ ˖Explorer",
     "elite": "୨ৎ ˖ Elite",
@@ -302,11 +303,11 @@ LEGACY_ROLE_MIGRATION = {
 }
 
 # ==============================================================================
-# 3. TEXT NORMALIZATION & RESILIENT LOOKUPS
+# 3. TEXT NORMALIZATION & RESILIENT HELPERS
 # ==============================================================================
 
 def normalize_text(text: str) -> str:
-    """Strips zero-width marks, normalizes Unicode symbols, and squashes whitespace."""
+    """Strips zero-width characters, normalizes Unicode glyphs, and trims whitespace."""
     if not text:
         return ""
     text = re.sub(r"[\u200B-\u200D\uFEFF\u200E\u200F]", "", text)
@@ -314,12 +315,12 @@ def normalize_text(text: str) -> str:
     return " ".join(text.split()).strip().lower()
 
 def clean_slug(name: str) -> str:
-    """Strips punctuation and emojis to create a match slug for legacy channel comparisons."""
+    """Strips symbols and punctuation for duplicate channel checks."""
     cleaned = re.sub(r"[^\w\s]", "", name)
     return " ".join(cleaned.split()).strip().lower()
 
 def find_role_resilient(guild: discord.Guild, target_name: str) -> Optional[discord.Role]:
-    """Finds a role by normalized fuzzy match."""
+    """Finds role by fuzzy-matching normalized Unicode strings."""
     clean_target = normalize_text(target_name)
     for role in guild.roles:
         if normalize_text(role.name) == clean_target:
@@ -334,7 +335,7 @@ async def ensure_role_exists(
     hoist: bool = False,
     mentionable: bool = False
 ) -> Optional[discord.Role]:
-    """Retrieves or provisions a role safely within hierarchy limits."""
+    """Safely retrieves or provisions server roles within bot hierarchy limits."""
     role = find_role_resilient(guild, name)
     if not role:
         if not guild.me.guild_permissions.manage_roles:
@@ -343,14 +344,14 @@ async def ensure_role_exists(
             role = await guild.create_role(
                 name=name, color=color, permissions=permissions,
                 hoist=hoist, mentionable=mentionable,
-                reason="Auto-created by role management system"
+                reason="System auto-role setup"
             )
         except (discord.Forbidden, discord.HTTPException):
             return None
     return role
 
 # ==============================================================================
-# 4. JSON STORAGE & BACKUP ENGINE (#bot-memory)
+# 4. JSON STORAGE & #BOT-MEMORY BACKUP ENGINE
 # ==============================================================================
 
 class MemoryEncoder(json.JSONEncoder):
@@ -442,7 +443,7 @@ async def load_state_from_memory(guild: discord.Guild, memory_channel_name: str 
     return {}
 
 # ==============================================================================
-# 5. PERMISSION OVERWRITE ROUTER
+# 5. PERMISSION OVERWRITE ENGINE
 # ==============================================================================
 
 def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, discord.PermissionOverwrite]:
@@ -524,7 +525,23 @@ def generate_channel_overwrites(guild: discord.Guild, scheme: str) -> Dict[Any, 
 # 6. PROGRESSION ENGINE (LEVELS & TENURE)
 # ==============================================================================
 
+async def verify_member_tenure(member: discord.Member):
+    """Safely audits member join age against the 365-day milestone."""
+    if not member.joined_at:
+        return
+    now = datetime.now(timezone.utc)
+    if (now - member.joined_at).days >= 365:
+        og_role = find_role_resilient(member.guild, OG_ROLE_NAME)
+        if not og_role:
+            og_role = await ensure_role_exists(member.guild, OG_ROLE_NAME, discord.Color.dark_magenta())
+        if og_role and og_role not in member.roles and member.guild.me.top_role > og_role:
+            try:
+                await member.add_roles(og_role, reason="Tenure: Reached 365 days")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
 async def sync_member_level_tier(member: discord.Member, new_level: int):
+    """Safely transitions level tier roles while preserving vanity/identity tags."""
     guild = member.guild
     target_tier_data = None
     for (min_lvl, max_lvl), config in LEVEL_TIER_ROLES.items():
@@ -554,13 +571,14 @@ async def sync_member_level_tier(member: discord.Member, new_level: int):
 
     try:
         if to_remove:
-            await member.remove_roles(*to_remove, reason="Progression: Tier swap")
+            await member.remove_roles(*to_remove, reason="Level tier advancement")
         if target_role and target_role not in member.roles and guild.me.top_role > target_role:
-            await member.add_roles(target_role, reason="Progression: Tier unlock")
+            await member.add_roles(target_role, reason="Level tier advancement")
     except (discord.Forbidden, discord.HTTPException):
         pass
 
 async def add_xp(member: discord.Member, xp_amount: int):
+    """Awards experience points, checks promotion boundaries, and dispatches notices."""
     if member.bot or not member.guild:
         return
 
@@ -585,7 +603,7 @@ async def add_xp(member: discord.Member, xp_amount: int):
         if ann_ch:
             embed = discord.Embed(
                 title="⚡ Level Advanced!",
-                description=f"Congratulations {member.mention}, you reached **Level {new_level}**! 🎉\nNew permissions and cosmetics unlocked.",
+                description=f"Congratulations {member.mention}, you reached **Level {new_level}**! 🎉\nNew role permissions and perks have been unlocked.",
                 color=discord.Color.gold(),
                 timestamp=discord.utils.utcnow()
             )
@@ -595,7 +613,7 @@ async def add_xp(member: discord.Member, xp_amount: int):
         await save_state_to_memory(guild, data=bot.server_state[guild_id])
 
 # ==============================================================================
-# 7. UI VIEWS & INTERACTIVE PANELS
+# 7. INTERACTIVE UI VIEWS
 # ==============================================================================
 
 class CommunityRolesView(discord.ui.View):
@@ -607,7 +625,7 @@ class CommunityRolesView(discord.ui.View):
         guild, member = interaction.guild, interaction.user
         role = await ensure_role_exists(guild, role_name, color, mentionable=mentionable)
         if not role or guild.me.top_role <= role:
-            return await interaction.followup.send("⚠️ Cannot manage this role due to hierarchy.", ephemeral=True)
+            return await interaction.followup.send("⚠️ Cannot manage role due to hierarchy position.", ephemeral=True)
 
         if role in member.roles:
             await member.remove_roles(role, reason="Self-role toggle off")
@@ -627,10 +645,10 @@ class CommunityRolesView(discord.ui.View):
 class ColorSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label=name, emoji="🎨", description=f"Switch color to {name}")
+            discord.SelectOption(label=name, emoji="🎨", description=f"Switch display color to {name}")
             for name in PRO_HEX_COLORS
         ]
-        options.append(discord.SelectOption(label="Reset Color", emoji="⚪", description="Remove custom color"))
+        options.append(discord.SelectOption(label="Reset Color", emoji="⚪", description="Remove custom color role"))
         super().__init__(placeholder="Choose your display chat color...", min_values=1, max_values=1, custom_id="sel_hex_colors", options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -653,12 +671,49 @@ class ColorSelect(discord.ui.Select):
             await member.add_roles(target_role, reason="Self-assigned chat color")
             await interaction.followup.send(f"✨ Equipped **{selected}**!", ephemeral=True)
         else:
-            await interaction.followup.send("❌ Error applying color. Role hierarchy conflict.", ephemeral=True)
+            await interaction.followup.send("❌ Cannot assign color. Hierarchy conflict.", ephemeral=True)
 
 class ColorView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(ColorSelect())
+
+class GenderSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Male ★★", emoji="👦", description="Select Male identity role"),
+            discord.SelectOption(label="Female ★★", emoji="👧", description="Select Female identity role"),
+            discord.SelectOption(label="Non-Binary", emoji="✨", description="Select Non-Binary identity role"),
+            discord.SelectOption(label="Remove Gender Role", emoji="⚪", description="Clear identity roles")
+        ]
+        super().__init__(placeholder="Choose your identity role...", min_values=1, max_values=1, custom_id="sel_gender_roles", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        guild, member = interaction.guild, interaction.user
+        selected = self.values[0]
+
+        to_remove = [r for r in member.roles if r.name in GENDER_ROLES and guild.me.top_role > r]
+        if to_remove:
+            await member.remove_roles(*to_remove, reason="Gender role update")
+
+        if selected == "Remove Gender Role":
+            return await interaction.followup.send("⚪ Removed your identity role.", ephemeral=True)
+
+        target_role = find_role_resilient(guild, selected)
+        if not target_role:
+            target_role = await ensure_role_exists(guild, selected, GENDER_ROLES[selected])
+
+        if target_role and guild.me.top_role > target_role:
+            await member.add_roles(target_role, reason="Identity role self-assignment")
+            await interaction.followup.send(f"✨ Assigned **{selected}**!", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ Error assigning identity role. Hierarchy issue.", ephemeral=True)
+
+class GenderView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(GenderSelect())
 
 class TicketControlsView(discord.ui.View):
     def __init__(self):
@@ -700,7 +755,7 @@ class TicketLaunchView(discord.ui.View):
                 overwrites[st_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True)
 
         try:
-            ch = await guild.create_text_channel(name=ticket_ch_name, category=category, overwrites=overwrites, reason="Support ticket")
+            ch = await guild.create_text_channel(name=ticket_ch_name, category=category, overwrites=overwrites, reason="Support ticket open")
             embed = discord.Embed(
                 title="🎫 Support Portal",
                 description=f"Welcome {user.mention}! Staff will assist you shortly.\nClick **Close Ticket** below when finished.",
@@ -709,10 +764,10 @@ class TicketLaunchView(discord.ui.View):
             await ch.send(content=f"{user.mention}", embed=embed, view=TicketControlsView())
             await interaction.followup.send(f"✅ Ticket created: {ch.mention}", ephemeral=True)
         except (discord.Forbidden, discord.HTTPException):
-            await interaction.followup.send("❌ Failed to open ticket channel.", ephemeral=True)
+            await interaction.followup.send("❌ Could not create ticket channel.", ephemeral=True)
 
 # ==============================================================================
-# 8. BOT CLIENT CORE & LIFECYCLE
+# 8. BOT CORE CLIENT & INITIALIZATION
 # ==============================================================================
 
 class ChillVerseBot(commands.Bot):
@@ -724,8 +779,10 @@ class ChillVerseBot(commands.Bot):
         self.server_state: Dict[int, Any] = {}
 
     async def setup_hook(self):
+        # Register persistent views to preserve UI state across reconnects
         self.add_view(CommunityRolesView())
         self.add_view(ColorView())
+        self.add_view(GenderView())
         self.add_view(TicketLaunchView())
         self.add_view(TicketControlsView())
 
@@ -754,15 +811,31 @@ async def on_ready():
         if restored:
             bot.server_state[guild.id] = restored
             print(f"✅ Backups restored for '{guild.name}'")
+        for member in guild.members:
+            if not member.bot:
+                await verify_member_tenure(member)
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    if member.bot:
+        return
+    # Auto-assign initial Newbie rank
+    newbie_role = find_role_resilient(member.guild, "୨୧Newbie୨୧")
+    if not newbie_role:
+        newbie_role = await ensure_role_exists(member.guild, "୨୧Newbie୨୧", discord.Color.teal())
+    if newbie_role and member.guild.me.top_role > newbie_role:
+        try:
+            await member.add_roles(newbie_role, reason="Auto-assign on onboarding")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
-    # Server Booster Reward & Announcement
     if not before.premium_since and after.premium_since:
         booster_role = find_role_resilient(after.guild, BOOSTER_ROLE_NAME)
         if booster_role and booster_role not in after.roles and after.guild.me.top_role > booster_role:
             try:
-                await after.add_roles(booster_role, reason="Booster reward")
+                await after.add_roles(booster_role, reason="Server boost perk")
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
@@ -781,7 +854,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
-        # Disboard Bump Detection
+        # Disboard Automated Detection
         if message.author.id == 302050872383242240 or (message.author.bot and "bump" in message.content.lower()):
             success = "bump done" in message.content.lower()
             if not success and message.embeds:
@@ -805,7 +878,7 @@ async def on_message(message: discord.Message):
         await message.channel.send(f"👋 Welcome back {message.author.mention}, I removed your AFK.", delete_after=10)
         await save_state_to_memory(message.guild, data=bot.server_state[guild_id])
 
-    # Pinged while AFK (10s auto-delete)
+    # Mentioned while AFK (10s auto-delete)
     if message.mentions:
         for member in message.mentions:
             m_str = str(member.id)
@@ -815,7 +888,6 @@ async def on_message(message: discord.Message):
                 t_str = f"{mins}m ago" if mins > 0 else "just now"
                 await message.channel.send(f"💤 **{member.display_name}** is AFK: {rec['reason']} *({t_str})*", delete_after=10)
 
-    # Award Standard Chat XP
     await add_xp(message.author, 15)
     await bot.process_commands(message)
 
@@ -866,7 +938,7 @@ async def cmd_bump(ctx: commands.Context):
 
 @bot.command(name="confess")
 async def cmd_confess(ctx: commands.Context, *, confession_text: str):
-    """Posts anonymous confession into 🚦confession-🖇 and purges trigger."""
+    """Posts an anonymous confession into 🚦confession-🖇 and purges command trigger."""
     try:
         await ctx.message.delete()
     except (discord.Forbidden, discord.HTTPException):
@@ -912,7 +984,7 @@ async def cmd_poll(ctx: commands.Context, *, question: str):
 
     embed = discord.Embed(
         title="📊 Official Server Poll",
-        description=f"**{question}**\n\nReact below to register your vote!",
+        description=f"**{question}**\n\nReact below to vote!",
         color=discord.Color.gold(),
         timestamp=discord.utils.utcnow()
     )
@@ -924,8 +996,8 @@ async def cmd_poll(ctx: commands.Context, *, question: str):
 @bot.command(name="syncperms")
 @commands.has_permissions(administrator=True)
 async def cmd_syncperms(ctx: commands.Context):
-    """Synchronizes exact permission matrix to all live roles."""
-    status = await ctx.send("⏳ **Enforcing server permission matrices...**")
+    """Audits and synchronizes granular permissions for staff and leveling roles."""
+    status = await ctx.send("⏳ **Enforcing server permission hierarchy...**")
     guild = ctx.guild
     updated, failed = [], []
 
@@ -947,7 +1019,7 @@ async def cmd_syncperms(ctx: commands.Context):
                 except Exception as e:
                     failed.append(f"❌ `{role.name}`: {e}")
         else:
-            failed.append(f"⚠️ `{role.name}` is above the bot")
+            failed.append(f"⚠️ `{role.name}` is positioned above the bot")
 
     # 2. Progression Tier Permissions
     for (low, high), cfg in LEVEL_TIER_ROLES.items():
@@ -967,11 +1039,11 @@ async def cmd_syncperms(ctx: commands.Context):
                 except Exception as e:
                     failed.append(f"❌ `{role.name}`: {e}")
         else:
-            failed.append(f"⚠️ `{role.name}` is above the bot")
+            failed.append(f"⚠️ `{role.name}` is positioned above the bot")
 
     embed = discord.Embed(
-        title="🛡️ Permission Synchronization Report",
-        description="\n".join(updated) if updated else "All permissions are synchronized.",
+        title="🛡️ Permission Audit Results",
+        description="\n".join(updated) if updated else "All role permissions are fully up to date.",
         color=discord.Color.green() if not failed else discord.Color.gold(),
         timestamp=discord.utils.utcnow()
     )
@@ -979,18 +1051,50 @@ async def cmd_syncperms(ctx: commands.Context):
         embed.add_field(name="Hierarchy Conflicts", value="\n".join(failed), inline=False)
     await status.edit(content=None, embed=embed)
 
+@bot.command(name="autorole_setup")
+@commands.has_permissions(administrator=True)
+async def cmd_autorole_setup(ctx: commands.Context):
+    """Provisions all progression tiers, identity, milestone, and cosmetic roles."""
+    guild = ctx.guild
+    msg = await ctx.send("⏳ **Auditing and provisioning all server roles...**")
+
+    # Staff Ranks
+    for rname, cfg in ROLE_PERMISSIONS_CONFIG.items():
+        await ensure_role_exists(guild, rname, cfg["color"], cfg["permissions"], cfg["hoist"])
+
+    # Level Tiers
+    for (low, high), cfg in LEVEL_TIER_ROLES.items():
+        await ensure_role_exists(guild, cfg["name"], cfg["color"], cfg["permissions"], cfg["hoist"])
+
+    # Chat Colors & Gender Roles
+    for c_name, c_color in PRO_HEX_COLORS.items():
+        await ensure_role_exists(guild, c_name, c_color)
+    for g_name, g_color in GENDER_ROLES.items():
+        await ensure_role_exists(guild, g_name, g_color)
+
+    # Milestones & Utility Roles
+    await ensure_role_exists(guild, OG_ROLE_NAME, discord.Color.dark_magenta())
+    await ensure_role_exists(guild, VETERAN_ROLE_NAME, discord.Color.purple())
+    await ensure_role_exists(guild, BOOSTER_ROLE_NAME, discord.Color.nitro_pink())
+    await ensure_role_exists(guild, VANITY_ROLE_NAME, discord.Color.from_rgb(120, 100, 180))
+    await ensure_role_exists(guild, BUMP_ROLE_NAME, discord.Color.gold(), mentionable=True)
+    await ensure_role_exists(guild, POLL_ROLE_NAME, discord.Color.red(), mentionable=True)
+    await ensure_role_exists(guild, ROBLOX_ROLE_NAME, discord.Color.blue())
+
+    await msg.edit(content="✅ **All server roles, staff permissions, and cosmetics successfully initialized!**")
+
 @bot.command(name="setup_channels")
 @commands.has_permissions(administrator=True)
 async def cmd_setup_channels(ctx: commands.Context):
-    """Replaces old channels with the new stylized layout and cleans up duplicates."""
+    """Builds the stylized channel blueprint, enforces overwrites, and purges legacy channels."""
     guild = ctx.guild
-    status = await ctx.send("⏳ **Deploying blueprint and replacing outdated channels...**")
+    status = await ctx.send("⏳ **Step 1/3: Deploying new stylized architecture & channel locks...**")
 
     preserved_channels = set()
     preserved_categories = set()
     created, synced, purged = 0, 0, 0
 
-    # Step 1: Deploy / Verify New Blueprints
+    # Step 1: Create / Enforce Blueprint Channels
     for cat_data in EXTENDED_SERVER_BLUEPRINT:
         cat_name = cat_data["category"]
         category = discord.utils.find(lambda c: normalize_text(c.name) == normalize_text(cat_name), guild.categories)
@@ -1026,6 +1130,7 @@ async def cmd_setup_channels(ctx: commands.Context):
                 preserved_channels.add(channel.id)
 
     # Step 2: Purge Legacy Channels
+    await status.edit(content="⏳ **Step 2/3: Purging legacy and duplicate channels...**")
     blueprint_slugs = {clean_slug(ch["name"]) for cat in EXTENDED_SERVER_BLUEPRINT for ch in cat["channels"]}
     for ch in list(guild.text_channels) + list(guild.voice_channels):
         if ch.id in preserved_channels:
@@ -1042,6 +1147,7 @@ async def cmd_setup_channels(ctx: commands.Context):
                 pass
 
     # Step 3: Remove Empty Leftover Categories
+    await status.edit(content="⏳ **Step 3/3: Cleaning up empty categories...**")
     for cat in guild.categories:
         if cat.id not in preserved_categories and len(cat.channels) == 0:
             try:
@@ -1051,8 +1157,8 @@ async def cmd_setup_channels(ctx: commands.Context):
                 pass
 
     embed = discord.Embed(
-        title="🧹 Architecture Replacement Complete",
-        description=f"• **New Channels Built:** `{created}`\n• **Permissions Synced:** `{synced}`\n• **Legacy Purged:** `{purged}`",
+        title="🧹 Channel Replacement Complete",
+        description=f"• **New Channels Deployed:** `{created}`\n• **Permissions Synchronized:** `{synced}`\n• **Legacy Channels Purged:** `{purged}`",
         color=discord.Color.green(),
         timestamp=discord.utils.utcnow()
     )
@@ -1076,7 +1182,7 @@ async def cmd_removeadminrole(ctx: commands.Context):
         for m in old_role.members:
             if highness not in m.roles:
                 try:
-                    await m.add_roles(highness, reason="Admin migration")
+                    await m.add_roles(highness, reason="Admin migration to Highness")
                     migrated += 1
                     await asyncio.sleep(0.35)
                 except Exception:
@@ -1094,7 +1200,7 @@ async def cmd_communitypanel(ctx: commands.Context):
     """Spawns the PollPings and Roblox self-assignment view."""
     embed = discord.Embed(
         title="✨ Self-Assignable Roles",
-        description="Click below to equip or remove optional notification roles:\n\n📊 **Poll Pings** — Server poll alerts\n🎮 **Roblox Members** — Access to Roblox community chat\n\n*Click again to toggle off.*",
+        description="Click below to toggle optional notification and community roles:\n\n📊 **Poll Pings** — Server poll alerts\n🎮 **Roblox Members** — Access to Roblox community chat\n\n*Click again to toggle off.*",
         color=discord.Color.blue()
     )
     await ctx.send(embed=embed, view=CommunityRolesView())
@@ -1110,10 +1216,25 @@ async def cmd_postcolors(ctx: commands.Context):
     ch = discord.utils.find(lambda c: "colours" in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
     embed = discord.Embed(
         title="🎨 Customize Your Name Color",
-        description="Choose a color from the dropdown below to tint your username in chat.\n\n*Selecting 'Reset Color' removes your custom hue.*",
+        description="Select a color from the dropdown below to tint your username in chat.\n\n*Selecting 'Reset Color' removes your custom cosmetic role.*",
         color=discord.Color.from_rgb(255, 105, 180)
     )
     await ch.send(embed=embed, view=ColorView())
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+@bot.command(name="postgender")
+@commands.has_permissions(administrator=True)
+async def cmd_postgender(ctx: commands.Context):
+    """Spawns the identity role selection dropdown."""
+    embed = discord.Embed(
+        title="✨ Identity Roles",
+        description="Select your gender identity from the dropdown below to update your profile role.",
+        color=discord.Color.purple()
+    )
+    await ctx.send(embed=embed, view=GenderView())
     try:
         await ctx.message.delete()
     except (discord.Forbidden, discord.HTTPException):
@@ -1126,7 +1247,7 @@ async def cmd_posttickets(ctx: commands.Context):
     ch = discord.utils.find(lambda c: "tickets" in normalize_text(c.name), ctx.guild.text_channels) or ctx.channel
     embed = discord.Embed(
         title="🎫 Server Support & Assistance",
-        description="Click below to open a private support ticket with server leadership.",
+        description="Need assistance or have a server inquiry?\nClick the button below to open a private ticket with staff.",
         color=discord.Color.teal()
     )
     await ch.send(embed=embed, view=TicketLaunchView())
@@ -1154,7 +1275,7 @@ async def cmd_restorebackup(ctx: commands.Context):
     await status.edit(content=None, embed=embed)
 
 # ==============================================================================
-# 11. ENTRY POINT
+# 11. APPLICATION ENTRY POINT
 # ==============================================================================
 
 if __name__ == "__main__":
