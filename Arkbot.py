@@ -6,6 +6,9 @@ import json
 import io
 import asyncio
 import os
+import re
+import random
+from collections import defaultdict
 
 # ==============================================================================
 # BOT SETUP & INTENTS
@@ -17,9 +20,44 @@ intents.members = True
 bot = commands.Bot(command_prefix=".", intents=intents)
 bot.remove_command('help') 
 
-# State variables
+# State tracking
 UPDATE_NOTIFIED = False
 MAINTENANCE_MODE = False
+AFK_USERS = {}
+
+# 10 Custom Lovely, Sad & Lonely AFK Messages
+AFK_PRESET_MESSAGES = [
+    "💔 Slipping away into the quiet shadows... see you when the world feels softer.",
+    "🌧️ Wandering through quiet echoes and lonely thoughts. Leaving sweet love behind while I'm away.",
+    "🥀 Drifting away to let a tired heart rest. Please keep my memories warm until I return.",
+    "🌙 Disappearing into the silent twilight... sending tender hugs across the distance.",
+    "🍂 Drifting into solitude for a little while. Missing you all already.",
+    "🖤 Floating where the silence feels gentler. Be back soon, don't forget me.",
+    "✨ Tucking away in my quiet sanctuary with fond thoughts of you all.",
+    "🥺 Stepping into the quiet mist to breathe alone for a bit. Catch you later, lovely souls.",
+    "🕊️ Seeking peace in quiet solitude. Leaving warm whispers of affection behind.",
+    "🌧️ Drifting into silent solitude to heal and recharge. Keep a warm thought for me."
+]
+
+# Joyful Welcome-Back Messages
+AFK_WELCOME_MESSAGES = [
+    "☀️ You're back! The entire room just lit up. Welcome back, {user}!",
+    "💖 Welcome back, {user}! The server felt far too quiet without your energy!",
+    "🎉 Look who returned! We missed you so much, {user}!",
+    "🥳 You're finally back! Everything feels complete again. Welcome home, {user}!",
+    "✨ Warmest welcome back, {user}! So genuinely happy to see you chatting again!"
+]
+
+# AutoMod tracking caches
+USER_MESSAGE_TIMESTAMPS = defaultdict(list)
+INVITE_REGEX = re.compile(r"(?:https?://)?(?:www\.)?(?:discord\.(?:gg|io|me|li)|discord(?:app)?\.com/invite)/[a-zA-Z0-9_-]+", re.IGNORECASE)
+
+def is_team_member(member: discord.Member) -> bool:
+    """Checks if a user has any staff or administrative hierarchy role."""
+    if member.guild_permissions.administrator:
+        return True
+    team_roles = ["Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"]
+    return any(role.name in team_roles for role in member.roles)
 
 def is_allowed_channel(channel):
     """Prevents commands from working in Playground or Music categories."""
@@ -37,7 +75,6 @@ async def check_maintenance_mode(ctx):
     if not MAINTENANCE_MODE:
         return True
         
-    # High Command and Admins bypass maintenance mode
     staff_roles = ["Supreme Leader", "Highness", "Authority"]
     is_high_command = any(role.name in staff_roles for role in ctx.author.roles) if hasattr(ctx.author, 'roles') else False
     
@@ -347,7 +384,46 @@ class ReactionRoleView(View):
         await self.toggle_role(interaction, "Roblox Members")
 
 # ==============================================================================
-# EVENTS & TASKS
+# AUDIT LOGGING & AUTOMOD EVENTS
+# ==============================================================================
+@bot.event
+async def on_message_delete(message):
+    """Logs message deletions to 🩸・bot-errors."""
+    if message.author.bot or not message.guild:
+        return
+    log_ch = discord.utils.get(message.guild.text_channels, name="🩸・bot-errors")
+    if log_ch:
+        embed = discord.Embed(title="🗑️ Message Deleted", color=discord.Color.red(), timestamp=discord.utils.utcnow())
+        embed.add_field(name="Author", value=message.author.mention, inline=True)
+        embed.add_field(name="Channel", value=message.channel.mention, inline=True)
+        embed.add_field(name="Content", value=message.content or "*None (attachment or embed)*", inline=False)
+        await log_ch.send(embed=embed)
+
+@bot.event
+async def on_message_edit(before, after):
+    """Logs message edits to 🩸・bot-errors."""
+    if before.author.bot or not before.guild or before.content == after.content:
+        return
+    log_ch = discord.utils.get(before.guild.text_channels, name="🩸・bot-errors")
+    if log_ch:
+        embed = discord.Embed(title="✏️ Message Edited", color=discord.Color.orange(), timestamp=discord.utils.utcnow())
+        embed.add_field(name="Author", value=before.author.mention, inline=True)
+        embed.add_field(name="Channel", value=before.channel.mention, inline=True)
+        embed.add_field(name="Before", value=before.content or "*Empty*", inline=False)
+        embed.add_field(name="After", value=after.content or "*Empty*", inline=False)
+        await log_ch.send(embed=embed)
+
+@bot.event
+async def on_member_remove(member):
+    """Logs member leaves and kicks to 🩸・bot-errors."""
+    log_ch = discord.utils.get(member.guild.text_channels, name="🩸・bot-errors")
+    if log_ch:
+        embed = discord.Embed(title="🚪 Member Left Server", color=discord.Color.dark_grey(), timestamp=discord.utils.utcnow())
+        embed.add_field(name="User", value=f"{member} ({member.id})", inline=False)
+        await log_ch.send(embed=embed)
+
+# ==============================================================================
+# CORE EVENTS & TASKS
 # ==============================================================================
 @bot.event
 async def on_ready():
@@ -358,26 +434,25 @@ async def on_ready():
     bot.add_view(CloseTicketView())
     bot.add_view(ReactionRoleView())
     
-    # Auto-notification to team-news upon deployment
     global UPDATE_NOTIFIED
     if not UPDATE_NOTIFIED:
         for guild in bot.guilds:
             team_news_ch = discord.utils.get(guild.text_channels, name="team-news")
             if team_news_ch:
                 embed = discord.Embed(
-                    title="🚀 Arkbot Updated — New Features Added!",
-                    description="Arkbot has just been successfully updated with the latest system features.",
+                    title="🚀 Arkbot Updated — AFK System & Auto-Disappear Active!",
+                    description="Arkbot has just been successfully updated with the latest community & AFK engine.",
                     color=discord.Color.green(),
                     timestamp=discord.utils.utcnow()
                 )
                 embed.add_field(
                     name="✨ Latest Features & Upgrades",
                     value=(
-                        "• **Maintenance Mode:** High Command can now lock down the bot with `.maintenance`.\n"
-                        "• **High Command Tickets:** Tickets are strictly visible to Supreme Leader, Highness, and Authority.\n"
-                        "• **Auto-Team Permissions:** Team roles are automatically synced across all categories.\n"
-                        "• **Staff Applications:** Embedded team application forms directly in `🎫・tickets`.\n"
-                        "• **Reaction Roles:** Persistent color and notification ping buttons deployed in `🎨・colours`."
+                        "• **AFK System (`.afk`):** 10 custom lovely, sad, and lonely messages with auto-return greetings.\n"
+                        "• **Auto-Disappear:** AFK confirmations and welcome-back notices delete after 10 seconds.\n"
+                        "• **AutoMod Engine:** Auto anti-invite link blocker and rate limiter active.\n"
+                        "• **Audit Logging:** Deleted/edited messages tracked directly into `🩸・bot-errors`.\n"
+                        "• **Private Tickets:** High command exclusive access (Supreme Leader, Highness, Authority)."
                     ),
                     inline=False
                 )
@@ -443,13 +518,74 @@ async def on_member_join(member):
 
 @bot.event
 async def on_message(message):
-    if message.author.bot or not is_allowed_channel(message.channel):
+    if message.author.bot:
         return
+
+    # Check if author is returning from AFK (ignore the .afk command invocation itself)
+    if message.author.id in AFK_USERS and not message.content.strip().startswith(f"{bot.command_prefix}afk"):
+        del AFK_USERS[message.author.id]
+        welcome_template = random.choice(AFK_WELCOME_MESSAGES)
+        welcome_embed = discord.Embed(
+            description=welcome_template.format(user=message.author.mention),
+            color=discord.Color.green()
+        )
+        await message.channel.send(embed=welcome_embed, delete_after=10)
+
+    # Check if message mentions someone who is currently AFK
+    if message.mentions and not message.author.bot:
+        for mentioned in message.mentions:
+            if mentioned.id in AFK_USERS:
+                afk_info = AFK_USERS[mentioned.id]
+                afk_embed = discord.Embed(
+                    description=f"💤 **{mentioned.display_name} is currently AFK:**\n*{afk_info['reason']}*",
+                    color=discord.Color.dark_purple()
+                )
+                await message.channel.send(embed=afk_embed, delete_after=10)
+
+    # AUTOMOD: Anti-Invite & Anti-Spam protection for public members
+    if isinstance(message.author, discord.Member) and not is_team_member(message.author):
+        # 1. Anti-Invite filter
+        if INVITE_REGEX.search(message.content):
+            await message.delete()
+            return await message.channel.send(f"⚠️ {message.author.mention}, posting invite links is prohibited here!", delete_after=4)
+
+        # 2. Anti-Spam rate limiter (More than 5 messages within 4 seconds)
+        now = datetime.datetime.now().timestamp()
+        timestamps = USER_MESSAGE_TIMESTAMPS[message.author.id]
+        timestamps.append(now)
+        USER_MESSAGE_TIMESTAMPS[message.author.id] = [t for t in timestamps if now - t < 4.0]
+        
+        if len(USER_MESSAGE_TIMESTAMPS[message.author.id]) > 5:
+            await message.delete()
+            return await message.channel.send(f"⚠️ {message.author.mention}, please slow down! You are sending messages too quickly.", delete_after=4)
+
+    if not is_allowed_channel(message.channel):
+        return
+        
     await bot.process_commands(message)
 
 # ==============================================================================
 # MODERATION & COMMUNITY COMMANDS
 # ==============================================================================
+@bot.command(name="afk")
+async def afk(ctx, *, reason: str = None):
+    """Sets the user's status to AFK with custom sad/lovely messages. Disappears in 10s."""
+    selected_status = reason if reason else random.choice(AFK_PRESET_MESSAGES)
+    AFK_USERS[ctx.author.id] = {
+        "reason": selected_status,
+        "time": datetime.datetime.utcnow()
+    }
+    
+    embed = discord.Embed(
+        description=f"🌙 **{ctx.author.display_name} is now AFK**\n*{selected_status}*",
+        color=discord.Color.purple()
+    )
+    await ctx.send(embed=embed, delete_after=10)
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
 @bot.command(name="ping")
 async def ping(ctx):
     latency = round(bot.latency * 1000)
@@ -530,6 +666,7 @@ async def setup_help(ctx):
     embed.add_field(
         name="🛡️ Moderation & General Commands", 
         value=(
+            "`.afk [reason]` — 🌙 Sets your status to AFK (auto-deletes in 10s).\n"
             "`.purge <number>` — Instantly bulk-deletes up to 100 messages.\n"
             "`.ping` — Checks bot latency and server gateway connection."
         ), 
