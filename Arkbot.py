@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands, tasks
 from discord.ui import Button, View, Modal, TextInput
 from typing import Union, Dict, Any, List, Optional
+from collections import defaultdict, deque
 import datetime
 import json
 import io
@@ -9,7 +10,6 @@ import asyncio
 import os
 import re
 import random
-from collections import defaultdict
 
 # ==============================================================================
 # BOT SETUP & INTENTS
@@ -18,7 +18,6 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-# State tracking
 UPDATE_NOTIFIED = False
 MAINTENANCE_MODE = False
 AFK_USERS: Dict[int, Dict[str, Any]] = {}
@@ -45,12 +44,62 @@ AFK_WELCOME_MESSAGES = [
     "✨ Warmest welcome back, {user}! So genuinely happy to see you chatting again!"
 ]
 
+# 10 Custom Bump Messages
+BUMP_PRESET_MESSAGES = [
+    "🚀 **Server Bumped!** Chill-Verse has been blasted into the cosmos! Thank you for supporting the community.",
+    "🌟 **Boom!** Your bump sent shockwaves across Discord! Our sanctuary continues to flourish.",
+    "💖 **Bump Successful!** Spreading the warmth of Chill-Verse far and wide. You're an absolute legend!",
+    "🔥 **Rising Higher!** Thanks to your bump, Chill-Verse is shining brighter than ever on the server boards.",
+    "🎉 **Bump Power Activated!** You just put Chill-Verse back at the top. The entire team appreciates you!",
+    "✨ **Pure Magic!** Chill-Verse was boosted through the clouds! Keep the amazing vibes rolling.",
+    "🛡️ **Honor to the Realm!** Your dedication keeps our gates open and thriving. Outstanding bump!",
+    "🎈 **Soaring Upward!** Another bump, another milestone reached. You made our community proud today!",
+    "⚡ **Volt of Energy!** Chill-Verse just received an electrifying boost across Discord.",
+    "🌙 **Twilight Ascendance!** Our voices echo louder thanks to your bump. Thank you for showing love!"
+]
+
+# Bump Timer Tracking
+LAST_BUMP_TIME: Optional[datetime.datetime] = None
+BUMP_TIMER_TASK: Optional[asyncio.Task] = None
+BUMP_COOLDOWN_SECONDS = 7200  # Strict 2 Hours
+XP_DATABASE_FILE = "user_xp.json"
+
 # AutoMod tracking caches
-USER_MESSAGE_TIMESTAMPS = defaultdict(list)
+USER_MESSAGE_TIMESTAMPS = defaultdict(lambda: deque(maxlen=10))
 INVITE_REGEX = re.compile(
     r"(?:https?://)?(?:www\.)?(?:discord\.(?:gg|io|me|li)|discord(?:app)?\.com/invite)/[a-zA-Z0-9_-]+",
     re.IGNORECASE
 )
+
+# ==============================================================================
+# PERSISTENT XP ENGINE
+# ==============================================================================
+def load_xp_database() -> Dict[str, int]:
+    if not os.path.exists(XP_DATABASE_FILE):
+        return {}
+    try:
+        with open(XP_DATABASE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_xp_database(data: Dict[str, int]) -> None:
+    try:
+        with open(XP_DATABASE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"Failed to save XP database: {e}")
+
+def add_user_xp(user_id: int, amount: int) -> int:
+    xp_db = load_xp_database()
+    uid = str(user_id)
+    xp_db[uid] = xp_db.get(uid, 0) + amount
+    save_xp_database(xp_db)
+    return xp_db[uid]
+
+def get_user_xp(user_id: int) -> int:
+    xp_db = load_xp_database()
+    return xp_db.get(str(user_id), 0)
 
 # ==============================================================================
 # SERVER BLUEPRINT CONFIGURATION
@@ -70,7 +119,7 @@ SERVER_BLUEPRINT: List[Dict[str, Any]] = [
             {"name": "team-news", "type": "text", "restricted": True},
             {"name": "🛡️・team-rules", "type": "text", "restricted": True},
             {"name": "💬・team-chat", "type": "text", "restricted": True},
-            {"name": "⏰・bump", "type": "text", "restricted": True},
+            {"name": "⏰・bump", "type": "text", "restricted": False},
             {"name": "team-news-forum", "type": "forum", "restricted": True}
         ]
     },
@@ -158,7 +207,6 @@ SERVER_BLUEPRINT: List[Dict[str, Any]] = [
 # AUTHORITY CHECKS & HELPERS
 # ==============================================================================
 def is_authority_holder():
-    """Command check restricted to Administrators and top Authority roles."""
     async def predicate(ctx):
         if not ctx.guild:
             return False
@@ -172,7 +220,6 @@ def is_authority_holder():
     return commands.check(predicate)
 
 def is_team_member(member: Union[discord.Member, discord.User]) -> bool:
-    """Checks if a user has any staff or administrative hierarchy role."""
     if not isinstance(member, discord.Member):
         return False
     if member.guild_permissions.administrator:
@@ -181,7 +228,6 @@ def is_team_member(member: Union[discord.Member, discord.User]) -> bool:
     return any(role.name in team_roles for role in member.roles)
 
 def is_allowed_channel(channel, member: Union[discord.Member, discord.User] = None) -> bool:
-    """Restricts regular members from running bot commands in designated fun/music channels."""
     if member and is_team_member(member):
         return True
     ch_name = getattr(channel, "name", "").lower()
@@ -193,19 +239,16 @@ def is_allowed_channel(channel, member: Union[discord.Member, discord.User] = No
     return True
 
 def resolve_guild_context(interaction: discord.Interaction, fallback_guild: Optional[discord.Guild] = None) -> Optional[discord.Guild]:
-    """Resolves guild context securely without blindly defaulting to an arbitrary server."""
     if interaction.guild:
         return interaction.guild
     if fallback_guild:
         return fallback_guild
-    # Restrict to matching guilds where the member is actively present
     matched = [g for g in interaction.client.guilds if g.get_member(interaction.user.id)]
     if len(matched) == 1:
         return matched[0]
     return None
 
 async def get_or_create_memory_channel(guild: discord.Guild) -> discord.TextChannel:
-    """Finds or constructs the bot-memory channel for persistence backups."""
     memory_ch = discord.utils.get(guild.text_channels, name="bot-memory")
     if memory_ch:
         return memory_ch
@@ -223,7 +266,6 @@ async def get_or_create_memory_channel(guild: discord.Guild) -> discord.TextChan
     return await guild.create_text_channel(name="bot-memory", overwrites=overwrites, reason="Arkbot State Persistence Engine")
 
 async def get_or_create_announcements_channel(guild: discord.Guild) -> discord.TextChannel:
-    """Finds or automatically creates the public announcements channel with read-only permissions."""
     ch = discord.utils.get(guild.text_channels, name="📢・announcements") or discord.utils.get(guild.text_channels, name="announcements")
     if ch:
         return ch
@@ -248,7 +290,6 @@ async def get_or_create_announcements_channel(guild: discord.Guild) -> discord.T
     )
 
 async def prune_old_backups(channel: discord.TextChannel, keep_count: int = 3):
-    """Retains only the newest `keep_count` backup messages and purges older ones."""
     try:
         backup_messages = []
         async for msg in channel.history(limit=100):
@@ -270,7 +311,6 @@ async def prune_old_backups(channel: discord.TextChannel, keep_count: int = 3):
         print(f"Failed to prune old backups in #{channel.name}: {e}")
 
 async def auto_configure_channel(channel):
-    """Configures read-only states, staff access, and restrictions on a channel."""
     if isinstance(channel, discord.CategoryChannel):
         return
 
@@ -299,6 +339,64 @@ async def auto_configure_channel(channel):
     try:
         await channel.edit(overwrites=overwrites, reason="Precise Channel Permission & Read-Only Sync")
     except Exception:
+        pass
+
+# ==============================================================================
+# ASYNC BUMP TIMERS & SCHEDULER (WITH @bumping & @Bump Pings)
+# ==============================================================================
+def get_bump_role_mentions(guild: discord.Guild) -> str:
+    """Finds and formats mentions for both @bumping and @Bump Pings roles."""
+    mentions = []
+    
+    # 1. Check for @bumping (case-insensitive)
+    bumping_role = discord.utils.find(lambda r: r.name.lower() == "bumping", guild.roles)
+    if bumping_role:
+        mentions.append(bumping_role.mention)
+        
+    # 2. Check for @Bump Pings
+    bump_pings_role = discord.utils.find(lambda r: r.name.lower() == "bump pings", guild.roles)
+    if bump_pings_role and bump_pings_role != bumping_role:
+        mentions.append(bump_pings_role.mention)
+
+    return " ".join(mentions) if mentions else "@here"
+
+async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.TextChannel):
+    """Schedules the 15-minute advance reminder and 2-hour completion alert."""
+    target_channel = discord.utils.get(guild.text_channels, name="⏰・bump") or origin_channel
+
+    try:
+        # Wait 1 hour 45 minutes (6300s) for the 15-minute advance warning
+        await asyncio.sleep(6300)
+        pings = get_bump_role_mentions(guild)
+
+        reminder_embed = discord.Embed(
+            title="⏰ Bump Reminder — 15 Minutes Remaining!",
+            description=(
+                f"Get ready {pings}!\n\n"
+                "**Chill-Verse** can be bumped again in exactly **15 minutes**.\n"
+                "The first member to bump gets **+250 XP** added to their profile!"
+            ),
+            color=discord.Color.gold(),
+            timestamp=discord.utils.utcnow()
+        )
+        await target_channel.send(content=pings, embed=reminder_embed)
+
+        # Wait remaining 15 minutes (900s)
+        await asyncio.sleep(900)
+        pings = get_bump_role_mentions(guild)
+
+        ready_embed = discord.Embed(
+            title="🔔 Chill-Verse is Ready to Bump!",
+            description=(
+                f"The 2-hour server cooldown has ended {pings}!\n\n"
+                "Type **`.bump`** right now to boost the server and claim your **+250 XP** reward!"
+            ),
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        await target_channel.send(content=pings, embed=ready_embed)
+
+    except asyncio.CancelledError:
         pass
 
 # ==============================================================================
@@ -396,12 +494,12 @@ class RulesView(View):
             return await interaction.response.send_message("⚠️ Error: Server context ambiguous. Please decline inside the server.", ephemeral=True)
 
         try:
-            await guild.ban(interaction.user, reason="Declined server terms and rules.")
-            await interaction.response.send_message("You have been banned for declining the rules.", ephemeral=True)
+            await guild.kick(interaction.user, reason="Declined server terms and rules.")
+            await interaction.response.send_message("You declined the rules and have been removed from the server. You can rejoin whenever you change your mind.", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("Error: Bot is missing permission to ban.", ephemeral=True)
+            await interaction.response.send_message("Error: Bot is missing permission to kick members.", ephemeral=True)
         except discord.HTTPException as e:
-            await interaction.response.send_message(f"Error handling ban: {e}", ephemeral=True)
+            await interaction.response.send_message(f"Error handling removal: {e}", ephemeral=True)
 
 class CloseTicketView(View):
     def __init__(self):
@@ -577,8 +675,8 @@ async def on_ready():
             team_news_ch = discord.utils.get(guild.text_channels, name="team-news")
             if team_news_ch:
                 embed = discord.Embed(
-                    title="🚀 Arkbot Updated — Public Announcements System Online!",
-                    description="High Command broadcasting active: `.announce` deployed with auto-creating read-only announcements room.",
+                    title="🚀 Arkbot Operational — Bump Lock System Active!",
+                    description="Strict 2-hour bump locks enforced. @bumping and @Bump Pings alerts configured.",
                     color=discord.Color.green(),
                     timestamp=discord.utils.utcnow()
                 )
@@ -686,7 +784,7 @@ async def on_member_join(member):
             "2. No bullying, hate speech, spam, or toxic behavior.\n"
             "3. Keep conversations teen and family-friendly.\n"
             "4. Follow Discord's Terms of Service at all times.\n\n"
-            "To unlock server access, click **Accept** to submit your details via pop-up form, or **Decline** to exit via immediate ban."
+            "To unlock server access, click **Accept** to submit your details via pop-up form, or **Decline** to exit."
         ),
         color=discord.Color.purple()
     )
@@ -738,16 +836,11 @@ async def on_message(message):
             return await message.channel.send(f"⚠️ {message.author.mention}, posting invite links is prohibited here!", delete_after=4)
 
         now = discord.utils.utcnow().timestamp()
-        timestamps = USER_MESSAGE_TIMESTAMPS[message.author.id]
-        timestamps.append(now)
-        valid_timestamps = [t for t in timestamps if now - t < 4.0]
+        queue = USER_MESSAGE_TIMESTAMPS[message.author.id]
+        queue.append(now)
 
-        if not valid_timestamps:
-            USER_MESSAGE_TIMESTAMPS.pop(message.author.id, None)
-        else:
-            USER_MESSAGE_TIMESTAMPS[message.author.id] = valid_timestamps
-
-        if len(valid_timestamps) > 5:
+        recent = [t for t in queue if now - t < 4.0]
+        if len(recent) > 5:
             try:
                 await message.delete()
             except discord.HTTPException:
@@ -759,6 +852,85 @@ async def on_message(message):
         return
 
     await bot.process_commands(message)
+
+# ==============================================================================
+# BUMP SYSTEM (STRICT 2-HOUR LOCK & DUAL ROLE REMINDER)
+# ==============================================================================
+@bot.command(name="bump")
+async def bump(ctx):
+    """Strictly locks bumping to full 2-hour cycles. Zero early bumps allowed."""
+    global LAST_BUMP_TIME, BUMP_TIMER_TASK
+    now = discord.utils.utcnow()
+
+    # STRICT 2-HOUR LOCK: Check if cooldown has not completed
+    if LAST_BUMP_TIME is not None:
+        elapsed = (now - LAST_BUMP_TIME).total_seconds()
+        if elapsed < BUMP_COOLDOWN_SECONDS:
+            # Delete the user's bump attempt immediately to enforce the lock
+            try:
+                await ctx.message.delete()
+            except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+                pass
+
+            remaining = int(BUMP_COOLDOWN_SECONDS - elapsed)
+            hours = remaining // 3600
+            minutes = (remaining % 3600) // 60
+            seconds = remaining % 60
+            time_str = f"{hours}h {minutes}m {seconds}s" if hours > 0 else f"{minutes}m {seconds}s"
+
+            lock_embed = discord.Embed(
+                title="⛔ BUMP IS CURRENTLY LOCKED!",
+                description=(
+                    f"**Nobody is allowed to bump early.**\n"
+                    f"Chill-Verse is on a strict 2-hour cooldown.\n\n"
+                    f"⏳ **Cooldown Remaining:** `{time_str}`\n"
+                    f"🔔 The bot will ping **@bumping** and **@Bump Pings** as soon as the server is ready!"
+                ),
+                color=discord.Color.red()
+            )
+            lock_embed.set_footer(text="Strict Cooldown Enforced • No early triggers permitted")
+            return await ctx.send(embed=lock_embed, delete_after=7)
+
+    # Cooldown is 100% complete — Process bump
+    LAST_BUMP_TIME = now
+    new_total_xp = add_user_xp(ctx.author.id, 250)
+    selected_msg = random.choice(BUMP_PRESET_MESSAGES)
+
+    embed = discord.Embed(
+        title="✨ CHILL-VERSE BUMPED! ✨",
+        description=(
+            f"{selected_msg}\n\n"
+            f"🎁 **Reward:** `{ctx.author.display_name}` earned **+250 XP**!\n"
+            f"📊 **Total XP:** `{new_total_xp:,} XP`\n\n"
+            f"🔒 **Bumping is now locked for the next 2 hours.**"
+        ),
+        color=discord.Color.gold(),
+        timestamp=now
+    )
+    embed.set_thumbnail(url=ctx.author.display_avatar.url)
+    embed.set_footer(text="Dual Reminder Armed: 1h 45m (15m alert) & 2h (cooldown finished)")
+    await ctx.send(embed=embed)
+
+    # Cancel previous background timer task if running
+    if BUMP_TIMER_TASK and not BUMP_TIMER_TASK.done():
+        BUMP_TIMER_TASK.cancel()
+
+    # Schedule the 1h 45m warning and 2h unlock ping for @bumping and @Bump Pings
+    BUMP_TIMER_TASK = asyncio.create_task(schedule_bump_timers(ctx.guild, ctx.channel))
+
+@bot.command(name="xp", aliases=["rank", "level_xp"])
+async def check_xp(ctx, member: Optional[discord.Member] = None):
+    """Displays a member's collected XP balance."""
+    target = member or ctx.author
+    user_xp = get_user_xp(target.id)
+
+    embed = discord.Embed(
+        title=f"📊 XP Balance — {target.display_name}",
+        description=f"{target.mention} currently holds **{user_xp:,} XP** in Chill-Verse.",
+        color=discord.Color.purple()
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    await ctx.send(embed=embed)
 
 # ==============================================================================
 # HIGH COMMAND ANNOUNCEMENT SYSTEM
@@ -1393,6 +1565,7 @@ async def setup_roles(ctx):
         {"name": "OG", "perms": base_perms, "color": discord.Color.dark_gold(), "hoist": False},
         {"name": "Veteran", "perms": base_perms, "color": discord.Color.dark_grey(), "hoist": False},
         {"name": "Vanity", "perms": base_perms, "color": discord.Color.magenta(), "hoist": False},
+        {"name": "bumping", "perms": discord.Permissions.none(), "color": discord.Color.purple(), "hoist": False},
         {"name": "Bump Pings", "perms": discord.Permissions.none(), "color": discord.Color.default(), "hoist": False},
         {"name": "Poll Pings", "perms": discord.Permissions.none(), "color": discord.Color.default(), "hoist": False},
         {"name": "Roblox Members", "perms": discord.Permissions.none(), "color": discord.Color.default(), "hoist": False},
@@ -1550,16 +1723,25 @@ async def setup_help(ctx):
 
     embed = discord.Embed(
         title="🤖 Arkbot Master Command Manual",
-        description="Full operational suite for Chill-Verse architecture, permission memory, and automated backups.",
+        description="Full operational suite for Chill-Verse architecture, bump rewards, permission memory, and automated backups.",
         color=discord.Color.purple()
+    )
+
+    embed.add_field(
+        name="⚡ Bump & XP Engine",
+        value=(
+            "`.bump` — Bumps the server and awards **+250 XP**.\n"
+            "*(Strict 2-hour server cooldown. Mentions **@bumping** & **@Bump Pings** 15 minutes before and upon completion.)*\n"
+            "`.xp [@user]` — Shows your or another member's current XP balance."
+        ),
+        inline=False
     )
 
     embed.add_field(
         name="📢 High Command Broadcast",
         value=(
             "`.announce <text>` — Sends an official broadcast to `📢・announcements`.\n"
-            "`.announce <Title> | <Content> [--everyone/--here]` — Posts an embed broadcast with role pings.\n"
-            "*(Only High Command can post; regular members can only read and view.)*"
+            "`.announce <Title> | <Content> [--everyone/--here]` — Posts an embed broadcast with role pings."
         ),
         inline=False
     )
