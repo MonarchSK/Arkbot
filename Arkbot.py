@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 from discord.ui import Button, View, Modal, TextInput
-from typing import Union
+from typing import Union, Dict, Any, List, Optional
 import datetime
 import json
 import io
@@ -18,15 +18,12 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix=".", intents=intents)
-bot.remove_command("help")
-
 # State tracking
 UPDATE_NOTIFIED = False
 MAINTENANCE_MODE = False
-AFK_USERS = {}
+AFK_USERS: Dict[int, Dict[str, Any]] = {}
 
-# 10 Custom Lovely, Sad & Lonely AFK Messages
+# Custom AFK Messages
 AFK_PRESET_MESSAGES = [
     "💔 Slipping away into the quiet shadows... see you when the world feels softer.",
     "🌧️ Wandering through quiet echoes and lonely thoughts. Leaving sweet love behind while I'm away.",
@@ -40,7 +37,6 @@ AFK_PRESET_MESSAGES = [
     "🌧️ Drifting into silent solitude to heal and recharge. Keep a warm thought for me."
 ]
 
-# Joyful Welcome-Back Messages
 AFK_WELCOME_MESSAGES = [
     "☀️ You're back! The entire room just lit up. Welcome back, {user}!",
     "💖 Welcome back, {user}! The server felt far too quiet without your energy!",
@@ -56,63 +52,15 @@ INVITE_REGEX = re.compile(
     re.IGNORECASE
 )
 
-def is_team_member(member: Union[discord.Member, discord.User]) -> bool:
-    """Checks if a user has any staff or administrative hierarchy role."""
-    if not isinstance(member, discord.Member):
-        return False
-    if member.guild_permissions.administrator:
-        return True
-    team_roles = {"Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"}
-    return any(role.name in team_roles for role in member.roles)
-
-def is_allowed_channel(channel, member: Union[discord.Member, discord.User] = None) -> bool:
-    """Prevents regular member commands from working in Playground or Music categories."""
-    if member and is_team_member(member):
-        return True
-    if not isinstance(channel, discord.TextChannel):
-        return False
-    if "playground" in channel.name.lower():
-        return False
-    if channel.category and "music" in channel.category.name.lower():
-        return False
-    return True
-
-def resolve_guild_context(interaction: discord.Interaction, fallback_guild: discord.Guild = None) -> discord.Guild:
-    """Resolves guild context whether an interaction happens in a server channel or DM."""
-    if interaction.guild:
-        return interaction.guild
-    if fallback_guild:
-        return fallback_guild
-    for guild in interaction.client.guilds:
-        if guild.get_member(interaction.user.id):
-            return guild
-    return interaction.client.guilds[0] if interaction.client.guilds else None
-
-@bot.check
-async def check_maintenance_mode(ctx):
-    """Restricts command execution during maintenance mode to High Command only."""
-    if not MAINTENANCE_MODE:
-        return True
-
-    is_admin = getattr(getattr(ctx.author, "guild_permissions", None), "administrator", False)
-    staff_roles = {"Supreme Leader", "Highness", "Authority"}
-    user_roles = getattr(ctx.author, "roles", [])
-    is_high_command = any(role.name in staff_roles for role in user_roles)
-
-    if is_admin or is_high_command:
-        return True
-
-    await ctx.send("🛠️ **Maintenance Mode Active:** Arkbot is currently undergoing maintenance. Regular commands are temporarily disabled.", delete_after=6)
-    return False
-
 # ==============================================================================
-# CUSTOM BLUEPRINT CONFIGURATION
+# SERVER BLUEPRINT CONFIGURATION
 # ==============================================================================
-SERVER_BLUEPRINT = [
+SERVER_BLUEPRINT: List[Dict[str, Any]] = [
     {
         "category": "Welcome",
         "channels": [
-            {"name": "server-rules", "type": "text", "restricted": False},
+            {"name": "📢・announcements", "type": "text", "restricted": False, "read_only": True},
+            {"name": "server-rules", "type": "text", "restricted": False, "read_only": True},
             {"name": "👋・welcome", "type": "text", "restricted": False}
         ]
     },
@@ -192,7 +140,7 @@ SERVER_BLUEPRINT = [
     {
         "category": "Info 🩵",
         "channels": [
-            {"name": "📢・level-announcements", "type": "text", "restricted": False},
+            {"name": "📢・level-announcements", "type": "text", "restricted": False, "read_only": True},
             {"name": "🎫・tickets", "type": "text", "restricted": False},
             {"name": "🎨・colours", "type": "text", "restricted": False}
         ]
@@ -207,10 +155,122 @@ SERVER_BLUEPRINT = [
 ]
 
 # ==============================================================================
-# AUTO-PERMISSION ENFORCEMENT
+# AUTHORITY CHECKS & HELPERS
 # ==============================================================================
+def is_authority_holder():
+    """Command check restricted to Administrators and top Authority roles."""
+    async def predicate(ctx):
+        if not ctx.guild:
+            return False
+        if getattr(ctx.author.guild_permissions, "administrator", False):
+            return True
+        authority_roles = {"Supreme Leader", "Highness", "Authority"}
+        user_roles = getattr(ctx.author, "roles", [])
+        if any(role.name in authority_roles for role in user_roles):
+            return True
+        raise commands.CheckFailure("⛔ **Restricted:** Only Administrators and Authority holders can execute this command.")
+    return commands.check(predicate)
+
+def is_team_member(member: Union[discord.Member, discord.User]) -> bool:
+    """Checks if a user has any staff or administrative hierarchy role."""
+    if not isinstance(member, discord.Member):
+        return False
+    if member.guild_permissions.administrator:
+        return True
+    team_roles = {"Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"}
+    return any(role.name in team_roles for role in member.roles)
+
+def is_allowed_channel(channel, member: Union[discord.Member, discord.User] = None) -> bool:
+    """Restricts regular members from running bot commands in designated fun/music channels."""
+    if member and is_team_member(member):
+        return True
+    ch_name = getattr(channel, "name", "").lower()
+    if "playground" in ch_name:
+        return False
+    category = getattr(channel, "category", None)
+    if category and "music" in category.name.lower():
+        return False
+    return True
+
+def resolve_guild_context(interaction: discord.Interaction, fallback_guild: Optional[discord.Guild] = None) -> Optional[discord.Guild]:
+    """Resolves guild context securely without blindly defaulting to an arbitrary server."""
+    if interaction.guild:
+        return interaction.guild
+    if fallback_guild:
+        return fallback_guild
+    # Restrict to matching guilds where the member is actively present
+    matched = [g for g in interaction.client.guilds if g.get_member(interaction.user.id)]
+    if len(matched) == 1:
+        return matched[0]
+    return None
+
+async def get_or_create_memory_channel(guild: discord.Guild) -> discord.TextChannel:
+    """Finds or constructs the bot-memory channel for persistence backups."""
+    memory_ch = discord.utils.get(guild.text_channels, name="bot-memory")
+    if memory_ch:
+        return memory_ch
+
+    admin_roles = ["Supreme Leader", "Highness", "Authority"]
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True)
+    }
+    for rname in admin_roles:
+        r = discord.utils.get(guild.roles, name=rname)
+        if r:
+            overwrites[r] = discord.PermissionOverwrite(view_channel=True, read_message_history=True)
+
+    return await guild.create_text_channel(name="bot-memory", overwrites=overwrites, reason="Arkbot State Persistence Engine")
+
+async def get_or_create_announcements_channel(guild: discord.Guild) -> discord.TextChannel:
+    """Finds or automatically creates the public announcements channel with read-only permissions."""
+    ch = discord.utils.get(guild.text_channels, name="📢・announcements") or discord.utils.get(guild.text_channels, name="announcements")
+    if ch:
+        return ch
+
+    welcome_cat = discord.utils.get(guild.categories, name="Welcome")
+    admin_roles = ["Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"]
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False, add_reactions=True, read_message_history=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_channels=True)
+    }
+    for rname in admin_roles:
+        r = discord.utils.get(guild.roles, name=rname)
+        if r:
+            overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+
+    return await guild.create_text_channel(
+        name="📢・announcements",
+        category=welcome_cat,
+        overwrites=overwrites,
+        reason="Automatic Public Announcement Channel Provisioning"
+    )
+
+async def prune_old_backups(channel: discord.TextChannel, keep_count: int = 3):
+    """Retains only the newest `keep_count` backup messages and purges older ones."""
+    try:
+        backup_messages = []
+        async for msg in channel.history(limit=100):
+            if msg.author == channel.guild.me:
+                has_backup_file = any(att.filename == "server_backup.json" for att in msg.attachments)
+                has_backup_text = "backup" in msg.content.lower()
+                if has_backup_file or has_backup_text:
+                    backup_messages.append(msg)
+
+        if len(backup_messages) > keep_count:
+            to_delete = backup_messages[keep_count:]
+            for old_msg in to_delete:
+                try:
+                    await old_msg.delete()
+                    await asyncio.sleep(0.35)
+                except (discord.NotFound, discord.HTTPException):
+                    pass
+    except Exception as e:
+        print(f"Failed to prune old backups in #{channel.name}: {e}")
+
 async def auto_configure_channel(channel):
-    """Ensures Team roles have access to ALL channels, while members are restricted ONLY to Team and Admin categories."""
+    """Configures read-only states, staff access, and restrictions on a channel."""
     if isinstance(channel, discord.CategoryChannel):
         return
 
@@ -219,9 +279,15 @@ async def auto_configure_channel(channel):
 
     cat_name = channel.category.name if channel.category else ""
     is_restricted = cat_name in ["Team <3", "Admin Area 🔒"] or channel.name == "bot-memory"
+    is_read_only = channel.name in ["📢・announcements", "server-rules", "📢・level-announcements"]
 
     overwrites = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False if is_restricted else True),
+        guild.default_role: discord.PermissionOverwrite(
+            view_channel=False if is_restricted else True,
+            send_messages=False if (is_restricted or is_read_only) else True,
+            add_reactions=True,
+            read_message_history=True
+        ),
         guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_channels=True)
     }
 
@@ -231,7 +297,7 @@ async def auto_configure_channel(channel):
             overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
     try:
-        await channel.edit(overwrites=overwrites, reason="Precise Team & Admin Category Restriction Sync")
+        await channel.edit(overwrites=overwrites, reason="Precise Channel Permission & Read-Only Sync")
     except Exception:
         pass
 
@@ -244,14 +310,14 @@ class VerificationModal(Modal, title="Server Verification Form"):
     dob = TextInput(label="Date of Birth (DD/MM/YYYY)", placeholder="01/01/2005", required=True, max_length=10)
     reason = TextInput(label="Why do you want to join?", style=discord.TextStyle.paragraph, placeholder="Tell us a bit about yourself...", required=True, max_length=500)
 
-    def __init__(self, target_guild: discord.Guild = None):
+    def __init__(self, target_guild: Optional[discord.Guild] = None):
         super().__init__()
         self.target_guild = target_guild
 
     async def on_submit(self, interaction: discord.Interaction):
         guild = resolve_guild_context(interaction, self.target_guild)
         if not guild:
-            return await interaction.response.send_message("⚠️ Error: Could not locate the server context.", ephemeral=True)
+            return await interaction.response.send_message("⚠️ Error: Could not determine server context. Please verify inside the server channel.", ephemeral=True)
 
         member = guild.get_member(interaction.user.id)
         if not member:
@@ -260,13 +326,15 @@ class VerificationModal(Modal, title="Server Verification Form"):
             except discord.HTTPException:
                 member = None
 
-        if member:
-            role = discord.utils.get(guild.roles, name="Member")
-            if role:
-                try:
-                    await member.add_roles(role, reason="Completed Verification Modal")
-                except discord.Forbidden:
-                    pass
+        if not member:
+            return await interaction.response.send_message("⚠️ Error: Could not find your member profile in the server.", ephemeral=True)
+
+        role = discord.utils.get(guild.roles, name="Member")
+        if role:
+            try:
+                await member.add_roles(role, reason="Completed Verification Modal")
+            except discord.Forbidden:
+                pass
 
         log_channel = discord.utils.get(guild.text_channels, name="💼・bot-commands")
         if log_channel:
@@ -302,25 +370,30 @@ class TeamApplicationModal(Modal, title="Staff Team Application"):
         embed.add_field(name="Reason to Join", value=self.reason.value, inline=False)
 
         if team_channel:
-            await team_channel.send(embed=embed)
+            try:
+                await team_channel.send(embed=embed)
+            except discord.HTTPException:
+                pass
 
         await interaction.response.send_message("✅ Your application has been successfully submitted to the Team for review!", ephemeral=True)
 
 class RulesView(View):
-    def __init__(self, target_guild: discord.Guild = None):
+    def __init__(self, target_guild: Optional[discord.Guild] = None):
         super().__init__(timeout=None)
         self.target_guild = target_guild
 
     @discord.ui.button(label="Accept", style=discord.ButtonStyle.green, custom_id="accept_rules")
     async def accept(self, interaction: discord.Interaction, button: Button):
         guild = resolve_guild_context(interaction, self.target_guild)
+        if not guild:
+            return await interaction.response.send_message("⚠️ Error: Server context not found. Please click Accept inside the server.", ephemeral=True)
         await interaction.response.send_modal(VerificationModal(target_guild=guild))
 
     @discord.ui.button(label="Decline", style=discord.ButtonStyle.red, custom_id="decline_rules")
     async def decline(self, interaction: discord.Interaction, button: Button):
         guild = resolve_guild_context(interaction, self.target_guild)
         if not guild:
-            return await interaction.response.send_message("⚠️ Error: Server context not found.", ephemeral=True)
+            return await interaction.response.send_message("⚠️ Error: Server context ambiguous. Please decline inside the server.", ephemeral=True)
 
         try:
             await guild.ban(interaction.user, reason="Declined server terms and rules.")
@@ -372,12 +445,15 @@ class TicketView(View):
             if role:
                 overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
-        ticket_ch = await guild.create_text_channel(
-            name=channel_name,
-            category=category,
-            overwrites=overwrites,
-            reason=f"Ticket opened by {interaction.user.name}"
-        )
+        try:
+            ticket_ch = await guild.create_text_channel(
+                name=channel_name,
+                category=category,
+                overwrites=overwrites,
+                reason=f"Ticket opened by {interaction.user.name}"
+            )
+        except discord.HTTPException as e:
+            return await interaction.response.send_message(f"⚠️ Failed to create ticket: {e}", ephemeral=True)
 
         embed = discord.Embed(
             title="🎫 Support Ticket",
@@ -408,12 +484,15 @@ class ReactionRoleView(View):
         if not member:
             return await interaction.response.send_message("Could not verify your membership.", ephemeral=True)
 
-        if role in member.roles:
-            await member.remove_roles(role)
-            await interaction.response.send_message(f"❌ Removed role: **{role.name}**", ephemeral=True)
-        else:
-            await member.add_roles(role)
-            await interaction.response.send_message(f"✅ Added role: **{role.name}**", ephemeral=True)
+        try:
+            if role in member.roles:
+                await member.remove_roles(role)
+                await interaction.response.send_message(f"❌ Removed role: **{role.name}**", ephemeral=True)
+            else:
+                await member.add_roles(role)
+                await interaction.response.send_message(f"✅ Added role: **{role.name}**", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("⚠️ Error: Bot lacks permission to assign this role (check hierarchy).", ephemeral=True)
 
     @discord.ui.button(label="🔴 Red", style=discord.ButtonStyle.secondary, custom_id="role_red", row=0)
     async def red_role(self, interaction: discord.Interaction, button: Button):
@@ -452,11 +531,65 @@ class ReactionRoleView(View):
         await self.toggle_role(interaction, "Roblox Members")
 
 # ==============================================================================
-# AUDIT LOGGING & AUTOMOD EVENTS
+# SUBCLASSED BOT & SETUP HOOK
+# ==============================================================================
+class ArkBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix=".", intents=intents)
+        self.remove_command("help")
+
+    async def setup_hook(self):
+        self.add_view(RulesView())
+        self.add_view(TicketView())
+        self.add_view(CloseTicketView())
+        self.add_view(ReactionRoleView())
+
+        if not hourly_backup_task.is_running():
+            hourly_backup_task.start()
+
+bot = ArkBot()
+
+@bot.check
+async def check_maintenance_mode(ctx):
+    if not MAINTENANCE_MODE:
+        return True
+
+    is_admin = getattr(getattr(ctx.author, "guild_permissions", None), "administrator", False)
+    staff_roles = {"Supreme Leader", "Highness", "Authority"}
+    user_roles = getattr(ctx.author, "roles", [])
+    is_high_command = any(role.name in staff_roles for role in user_roles)
+
+    if is_admin or is_high_command:
+        return True
+
+    await ctx.send("🛠️ **Maintenance Mode Active:** Arkbot is currently undergoing maintenance. Regular commands are temporarily disabled.", delete_after=6)
+    return False
+
+# ==============================================================================
+# AUDIT LOGGING & EVENTS
 # ==============================================================================
 @bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user} — Chill-Verse operational.")
+    global UPDATE_NOTIFIED
+    if not UPDATE_NOTIFIED:
+        for guild in bot.guilds:
+            team_news_ch = discord.utils.get(guild.text_channels, name="team-news")
+            if team_news_ch:
+                embed = discord.Embed(
+                    title="🚀 Arkbot Updated — Public Announcements System Online!",
+                    description="High Command broadcasting active: `.announce` deployed with auto-creating read-only announcements room.",
+                    color=discord.Color.green(),
+                    timestamp=discord.utils.utcnow()
+                )
+                try:
+                    await team_news_ch.send(embed=embed)
+                except Exception:
+                    pass
+        UPDATE_NOTIFIED = True
+
+@bot.event
 async def on_message_delete(message):
-    """Logs message deletions to 🩸・bot-errors."""
     if message.author.bot or not message.guild:
         return
     log_ch = discord.utils.get(message.guild.text_channels, name="🩸・bot-errors")
@@ -475,7 +608,6 @@ async def on_message_delete(message):
 
 @bot.event
 async def on_message_edit(before, after):
-    """Logs message edits to 🩸・bot-errors."""
     if before.author.bot or not before.guild or before.content == after.content:
         return
     log_ch = discord.utils.get(before.guild.text_channels, name="🩸・bot-errors")
@@ -499,7 +631,6 @@ async def on_message_edit(before, after):
 
 @bot.event
 async def on_member_remove(member):
-    """Logs member leaves and kicks to 🩸・bot-errors."""
     log_ch = discord.utils.get(member.guild.text_channels, name="🩸・bot-errors")
     if log_ch:
         embed = discord.Embed(title="🚪 Member Left Server", color=discord.Color.dark_grey(), timestamp=discord.utils.utcnow())
@@ -509,61 +640,22 @@ async def on_member_remove(member):
         except discord.HTTPException:
             pass
 
-# ==============================================================================
-# CORE EVENTS & TASKS
-# ==============================================================================
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user} — Chill-Verse operational.")
-
-    bot.add_view(RulesView())
-    bot.add_view(TicketView())
-    bot.add_view(CloseTicketView())
-    bot.add_view(ReactionRoleView())
-
-    global UPDATE_NOTIFIED
-    if not UPDATE_NOTIFIED:
-        for guild in bot.guilds:
-            team_news_ch = discord.utils.get(guild.text_channels, name="team-news")
-            if team_news_ch:
-                embed = discord.Embed(
-                    title="🚀 Arkbot Updated — AFK System & Auto-Disappear Active!",
-                    description="Arkbot has just been successfully updated with the latest community & AFK engine.",
-                    color=discord.Color.green(),
-                    timestamp=discord.utils.utcnow()
-                )
-                embed.add_field(
-                    name="✨ Latest Features & Upgrades",
-                    value=(
-                        "• **AFK System (`.afk`):** 10 custom lovely, sad, and lonely messages with auto-return greetings.\n"
-                        "• **Auto-Disappear:** AFK confirmations and welcome-back notices delete after 10 seconds.\n"
-                        "• **AutoMod Engine:** Auto anti-invite link blocker and rate limiter active.\n"
-                        "• **Audit Logging:** Deleted/edited messages tracked directly into `🩸・bot-errors`.\n"
-                        "• **Private Tickets:** High command exclusive access (Supreme Leader, Highness, Authority)."
-                    ),
-                    inline=False
-                )
-                embed.set_footer(text="Chill-Verse Architecture • Automatic Deployment Notice")
-                try:
-                    await team_news_ch.send(embed=embed)
-                except Exception:
-                    pass
-        UPDATE_NOTIFIED = True
-
-    if not hourly_backup_task.is_running():
-        hourly_backup_task.start()
-
 @bot.event
 async def on_guild_channel_create(channel):
     await auto_configure_channel(channel)
 
 @bot.event
 async def on_command_error(ctx, error):
-    if isinstance(error, (commands.CheckFailure, commands.CommandNotFound)):
+    if isinstance(error, commands.CheckFailure):
+        return await ctx.send(str(error), delete_after=6)
+    if isinstance(error, commands.CommandNotFound):
         return
     await ctx.send(f"⚠️ **DEBUG ERROR:** {error}")
     print(f"Command Error in {ctx.command}: {error}")
 
+# ==============================================================================
+# AUTOMATED HOURLY BACKUP
+# ==============================================================================
 @tasks.loop(hours=1.0)
 async def hourly_backup_task():
     await bot.wait_until_ready()
@@ -573,12 +665,14 @@ async def hourly_backup_task():
             continue
         backup_data = {
             "server_name": guild.name,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "roles": [{"name": role.name, "permissions": role.permissions.value} for role in guild.roles],
             "text_channels": [{"name": channel.name, "category": str(channel.category)} for channel in guild.text_channels]
         }
         file = discord.File(io.BytesIO(json.dumps(backup_data, indent=4).encode("utf-8")), filename="server_backup.json")
         try:
             await backup_channel.send(content="🔒 **Automated Hourly Backup**", file=file)
+            await prune_old_backups(backup_channel, keep_count=3)
         except Exception:
             pass
 
@@ -613,7 +707,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # 1. Check if author is returning from AFK
+    # 1. AFK Return Greeting
     if message.author.id in AFK_USERS and not message.content.strip().startswith(f"{bot.command_prefix}afk"):
         del AFK_USERS[message.author.id]
         welcome_template = random.choice(AFK_WELCOME_MESSAGES)
@@ -623,7 +717,7 @@ async def on_message(message):
         )
         await message.channel.send(embed=welcome_embed, delete_after=10)
 
-    # 2. Check if message mentions someone who is AFK (ignore self mentions)
+    # 2. AFK Mention Notice
     if message.mentions:
         for mentioned in message.mentions:
             if mentioned.id in AFK_USERS and mentioned.id != message.author.id:
@@ -634,9 +728,8 @@ async def on_message(message):
                 )
                 await message.channel.send(embed=afk_embed, delete_after=10)
 
-    # 3. AUTOMOD: Anti-Invite & Anti-Spam protection for public members
+    # 3. AutoMod (Only applies to non-staff inside servers)
     if isinstance(message.author, discord.Member) and not is_team_member(message.author):
-        # Anti-Invite filter
         if INVITE_REGEX.search(message.content):
             try:
                 await message.delete()
@@ -644,7 +737,6 @@ async def on_message(message):
                 pass
             return await message.channel.send(f"⚠️ {message.author.mention}, posting invite links is prohibited here!", delete_after=4)
 
-        # Anti-Spam rate limiter (More than 5 messages within 4 seconds)
         now = discord.utils.utcnow().timestamp()
         timestamps = USER_MESSAGE_TIMESTAMPS[message.author.id]
         timestamps.append(now)
@@ -662,18 +754,445 @@ async def on_message(message):
                 pass
             return await message.channel.send(f"⚠️ {message.author.mention}, please slow down! You are sending messages too quickly.", delete_after=4)
 
-    # 4. Check category / channel command restrictions
+    # 4. Command Execution Filter
     if not is_allowed_channel(message.channel, message.author):
         return
 
     await bot.process_commands(message)
 
 # ==============================================================================
-# MODERATION & COMMUNITY COMMANDS
+# HIGH COMMAND ANNOUNCEMENT SYSTEM
+# ==============================================================================
+@bot.command(name="announce", aliases=["broadcast"])
+@is_authority_holder()
+async def announce(ctx, *, payload: str = None):
+    if not payload:
+        return await ctx.send(
+            "⚠️ **Please provide content to announce!**\n"
+            "**Usage Examples:**\n"
+            f"• `{bot.command_prefix}announce Server update completed!`\n"
+            f"• `{bot.command_prefix}announce Title | Details of announcement here --everyone`",
+            delete_after=7
+        )
+
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        pass
+
+    guild = ctx.guild
+    announcements_ch = await get_or_create_announcements_channel(guild)
+
+    ping_type = None
+    if "--everyone" in payload or "--ping" in payload:
+        ping_type = "@everyone"
+        payload = payload.replace("--everyone", "").replace("--ping", "").strip()
+    elif "--here" in payload:
+        ping_type = "@here"
+        payload = payload.replace("--here", "").strip()
+
+    if "|" in payload:
+        parts = payload.split("|", 1)
+        title = parts[0].strip()
+        description = parts[1].strip()
+    else:
+        title = "📢 Official Server Announcement"
+        description = payload.strip()
+
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow()
+    )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    embed.set_author(name=f"Announcement by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    embed.set_footer(text="Chill-Verse High Command • Official Broadcast")
+
+    await announcements_ch.send(content=ping_type, embed=embed)
+    await ctx.send(f"✅ **Announcement broadcasted successfully to {announcements_ch.mention}!**", delete_after=5)
+
+    log_ch = discord.utils.get(guild.text_channels, name="🩸・bot-errors")
+    if log_ch:
+        audit_embed = discord.Embed(
+            title="📢 Official Announcement Published",
+            color=discord.Color.gold(),
+            timestamp=discord.utils.utcnow()
+        )
+        audit_embed.add_field(name="Announcer", value=ctx.author.mention, inline=True)
+        audit_embed.add_field(name="Channel", value=announcements_ch.mention, inline=True)
+        audit_embed.add_field(name="Ping", value=str(ping_type or "None"), inline=True)
+        audit_embed.add_field(name="Title", value=title, inline=False)
+        try:
+            await log_ch.send(embed=audit_embed)
+        except discord.HTTPException:
+            pass
+
+# ==============================================================================
+# SPECIFIC BOT ROLE REMOVER & PURGE ENGINE
+# ==============================================================================
+@bot.command(name="remove_bot_role", aliases=["strip_bot_role", "block_bot_role"])
+@is_authority_holder()
+async def remove_bot_role(ctx, target: Optional[Union[discord.Role, discord.Member, str]] = None):
+    channel = ctx.channel
+    guild = ctx.guild
+
+    if not target:
+        return await ctx.send(
+            "⚠️ **Please specify a target!**\n"
+            "**Examples:**\n"
+            f"• `{bot.command_prefix}remove_bot_role @BotRole`\n"
+            f"• `{bot.command_prefix}remove_bot_role @BotUser`\n"
+            f"• `{bot.command_prefix}remove_bot_role all` (removes all bot roles from this room)",
+            delete_after=7
+        )
+
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        pass
+
+    roles_to_block: List[discord.Role] = []
+
+    if isinstance(target, discord.Role):
+        roles_to_block.append(target)
+    elif isinstance(target, discord.Member):
+        if not target.bot:
+            return await ctx.send(f"⚠️ {target.mention} is a human user, not a bot.", delete_after=5)
+        bot_managed = [r for r in target.roles if r.managed and not r.is_default()]
+        if bot_managed:
+            roles_to_block.extend(bot_managed)
+        else:
+            top_r = target.top_role
+            if not top_r.is_default() and top_r < guild.me.top_role:
+                roles_to_block.append(top_r)
+        await channel.set_permissions(target, view_channel=False, send_messages=False, reason=f"Removed by {ctx.author}")
+    elif isinstance(target, str) and target.lower() == "all":
+        for entity in list(channel.overwrites.keys()):
+            if isinstance(entity, discord.Role):
+                if (entity.managed and not entity.is_default()) or "bot" in entity.name.lower():
+                    if entity != guild.me.top_role and not entity.permissions.administrator:
+                        roles_to_block.append(entity)
+            elif isinstance(entity, discord.Member) and entity.bot and entity.id != bot.user.id:
+                await channel.set_permissions(entity, view_channel=False, send_messages=False)
+
+    if not roles_to_block and not (isinstance(target, discord.Member) and target.bot):
+        return await ctx.send("⚠️ No matching bot roles found to remove from this channel.", delete_after=5)
+
+    blocked_names = []
+    for r in roles_to_block:
+        if r >= guild.me.top_role and r in guild.me.roles:
+            continue
+        try:
+            await channel.set_permissions(
+                r,
+                view_channel=False,
+                send_messages=False,
+                reason=f"Bot role stripped from channel by {ctx.author}"
+            )
+            blocked_names.append(r.name)
+            await asyncio.sleep(0.3)
+        except discord.Forbidden:
+            pass
+
+    summary = ", ".join([f"`{name}`" for name in blocked_names]) or "Target Bot"
+    await ctx.send(
+        f"🚫 **Channel Bot Role Removal:** Successfully removed/blocked **{summary}** from {channel.mention}!",
+        delete_after=6
+    )
+
+    log_ch = discord.utils.get(guild.text_channels, name="🩸・bot-errors")
+    if log_ch:
+        embed = discord.Embed(
+            title="🚫 Bot Role Removed From Channel",
+            color=discord.Color.dark_grey(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Executor", value=ctx.author.mention, inline=True)
+        embed.add_field(name="Channel", value=channel.mention, inline=True)
+        embed.add_field(name="Removed Roles", value=summary, inline=False)
+        try:
+            await log_ch.send(embed=embed)
+        except discord.HTTPException:
+            pass
+
+@bot.command(name="purge")
+@is_authority_holder()
+async def purge(ctx, amount: int = 10, target: Optional[Union[discord.Member, str]] = None):
+    if amount < 1:
+        return await ctx.send("⚠️ You must purge at least 1 message.", delete_after=4)
+    if amount > 1000:
+        return await ctx.send("⚠️ Safety Cap: Maximum purge limit is 1,000 messages per execution.", delete_after=5)
+
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        pass
+
+    def purge_check(m: discord.Message) -> bool:
+        if m.pinned:
+            return False
+        if isinstance(target, discord.Member):
+            return m.author.id == target.id
+        elif isinstance(target, str):
+            t_lower = target.lower()
+            if t_lower in ["bot", "bots"]:
+                return m.author.bot
+            if t_lower in ["link", "links"]:
+                return bool(INVITE_REGEX.search(m.content) or "http://" in m.content.lower() or "https://" in m.content.lower())
+        return True
+
+    deleted_total = 0
+    remaining = amount
+    while remaining > 0:
+        batch_size = min(remaining, 100)
+        try:
+            deleted_batch = await ctx.channel.purge(limit=batch_size, check=purge_check)
+        except discord.HTTPException as e:
+            await ctx.send(f"⚠️ Purge encountered an error (e.g. messages older than 14 days): {e}", delete_after=5)
+            break
+
+        deleted_count = len(deleted_batch)
+        deleted_total += deleted_count
+
+        if deleted_count < batch_size:
+            break
+
+        remaining -= batch_size
+        await asyncio.sleep(0.35)
+
+    target_desc = f"from {target.mention}" if isinstance(target, discord.Member) else (f"matching `{target}`" if target else "")
+    await ctx.send(f"🧹 **Authority Purge:** Cleared **{deleted_total}** message(s) {target_desc}.", delete_after=4)
+
+    log_ch = discord.utils.get(ctx.guild.text_channels, name="🩸・bot-errors")
+    if log_ch:
+        embed = discord.Embed(
+            title="🧹 Authority Purge Executed",
+            color=discord.Color.dark_red(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Executor", value=ctx.author.mention, inline=True)
+        embed.add_field(name="Channel", value=ctx.channel.mention, inline=True)
+        embed.add_field(name="Messages Cleared", value=f"**{deleted_total}** (Scanned: {amount})", inline=True)
+        embed.add_field(name="Filter Applied", value=str(target) if target else "None (All Unpinned)", inline=False)
+        try:
+            await log_ch.send(embed=embed)
+        except discord.HTTPException:
+            pass
+
+# ==============================================================================
+# PERMISSION MEMORY, BACKUPS & BLUEPRINT UPDATER
+# ==============================================================================
+@bot.command(name="backup")
+@commands.has_permissions(administrator=True)
+async def backup(ctx):
+    guild = ctx.guild
+    ch = discord.utils.get(guild.text_channels, name="🩸・bot-errors")
+    if not ch:
+        return await ctx.send("⚠️ Cannot find `🩸・bot-errors` to store the data.", delete_after=5)
+
+    backup_data = {
+        "server_name": guild.name,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "roles": [{"name": role.name, "permissions": role.permissions.value} for role in guild.roles],
+        "text_channels": [{"name": channel.name, "category": str(channel.category)} for channel in guild.text_channels]
+    }
+
+    file = discord.File(io.BytesIO(json.dumps(backup_data, indent=4).encode("utf-8")), filename="server_backup.json")
+    try:
+        await ch.send(content=f"🔒 **Manual Backup triggered by {ctx.author.mention}**", file=file)
+        await prune_old_backups(ch, keep_count=3)
+        await ctx.send("✅ Backup completed successfully! (Only the latest 3 backups are retained)", delete_after=5)
+    except Exception as e:
+        await ctx.send(f"⚠️ Failed to upload backup: {e}", delete_after=5)
+
+@bot.command(name="backup_perms")
+@commands.has_permissions(administrator=True)
+async def backup_perms(ctx):
+    guild = ctx.guild
+    memory_ch = await get_or_create_memory_channel(guild)
+
+    await ctx.send("🔄 **Scanning & serializing channel permissions...**")
+
+    perms_backup = {
+        "guild_id": guild.id,
+        "guild_name": guild.name,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "categories": {},
+        "channels": {}
+    }
+
+    for cat in guild.categories:
+        cat_overwrites = {}
+        for target, overwrite in cat.overwrites.items():
+            allow, deny = overwrite.pair()
+            target_type = "role" if isinstance(target, discord.Role) else "member"
+            cat_overwrites[str(target.id)] = {
+                "name": target.name,
+                "type": target_type,
+                "allow": allow.value,
+                "deny": deny.value
+            }
+        perms_backup["categories"][cat.name] = {
+            "id": cat.id,
+            "overwrites": cat_overwrites
+        }
+
+    for ch in guild.channels:
+        if isinstance(ch, discord.CategoryChannel):
+            continue
+        ch_overwrites = {}
+        for target, overwrite in ch.overwrites.items():
+            allow, deny = overwrite.pair()
+            target_type = "role" if isinstance(target, discord.Role) else "member"
+            ch_overwrites[str(target.id)] = {
+                "name": target.name,
+                "type": target_type,
+                "allow": allow.value,
+                "deny": deny.value
+            }
+        perms_backup["channels"][ch.name] = {
+            "id": ch.id,
+            "category": ch.category.name if ch.category else None,
+            "type": str(ch.type),
+            "overwrites": ch_overwrites
+        }
+
+    data_stream = io.BytesIO(json.dumps(perms_backup, indent=4).encode("utf-8"))
+    file = discord.File(data_stream, filename=f"channel_perms_memory_{guild.id}.json")
+
+    embed = discord.Embed(
+        title="🔒 Channel Permission Memory Snapshot",
+        description=f"Exported permissions for **{len(perms_backup['channels'])}** channels and **{len(perms_backup['categories'])}** categories.",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    await memory_ch.send(embed=embed, file=file)
+    await ctx.send(f"✅ Channel permissions memory successfully preserved in {memory_ch.mention}!")
+
+@bot.command(name="backup_channels")
+@commands.has_permissions(administrator=True)
+async def backup_channels(ctx):
+    guild = ctx.guild
+    memory_ch = await get_or_create_memory_channel(guild)
+
+    await ctx.send("🔄 **Preserving server channel names and structure...**")
+
+    structure = {
+        "guild_id": guild.id,
+        "guild_name": guild.name,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "categories": []
+    }
+
+    for cat in guild.categories:
+        cat_payload = {
+            "name": cat.name,
+            "position": cat.position,
+            "channels": []
+        }
+        for ch in cat.channels:
+            ch_data = {
+                "name": ch.name,
+                "type": str(ch.type),
+                "position": ch.position,
+                "user_limit": getattr(ch, "user_limit", None)
+            }
+            cat_payload["channels"].append(ch_data)
+        structure["categories"].append(cat_payload)
+
+    orphans = [
+        {"name": ch.name, "type": str(ch.type), "position": ch.position}
+        for ch in guild.channels
+        if not ch.category and not isinstance(ch, discord.CategoryChannel)
+    ]
+    structure["uncategorized"] = orphans
+
+    data_stream = io.BytesIO(json.dumps(structure, indent=4).encode("utf-8"))
+    file = discord.File(data_stream, filename=f"channel_names_layout_{guild.id}.json")
+
+    embed = discord.Embed(
+        title="📁 Server Channel Names & Structure Snapshot",
+        description="Saved complete structural layout with channel names and positioning.",
+        color=discord.Color.teal(),
+        timestamp=discord.utils.utcnow()
+    )
+    await memory_ch.send(embed=embed, file=file)
+    await ctx.send(f"✅ Channel hierarchy names safely archived into {memory_ch.mention}!")
+
+@bot.command(name="update_blueprint")
+@commands.has_permissions(administrator=True)
+async def update_blueprint(ctx):
+    global SERVER_BLUEPRINT
+    guild = ctx.guild
+    memory_ch = await get_or_create_memory_channel(guild)
+
+    await ctx.send("🔍 **Analyzing live server configuration to generate dynamic blueprint...**")
+
+    new_blueprint = []
+    for cat in guild.categories:
+        cat_data = {
+            "category": cat.name,
+            "channels": []
+        }
+        for ch in cat.channels:
+            if ch.name == "bot-memory":
+                continue
+
+            ch_type = "text"
+            if isinstance(ch, discord.VoiceChannel):
+                ch_type = "voice"
+            elif isinstance(ch, getattr(discord, "ForumChannel", ())):
+                ch_type = "forum"
+
+            default_overwrite = ch.overwrites.get(guild.default_role)
+            is_restricted = False
+            is_read_only = False
+            if default_overwrite:
+                if default_overwrite.view_channel is False:
+                    is_restricted = True
+                if default_overwrite.send_messages is False:
+                    is_read_only = True
+            elif cat.name in ["Team <3", "Admin Area 🔒"]:
+                is_restricted = True
+
+            ch_entry = {
+                "name": ch.name,
+                "type": ch_type,
+                "restricted": is_restricted,
+                "read_only": is_read_only
+            }
+            if ch_type == "voice" and getattr(ch, "user_limit", 0) > 0:
+                ch_entry["user_limit"] = ch.user_limit
+
+            cat_data["channels"].append(ch_entry)
+
+        if cat_data["channels"]:
+            new_blueprint.append(cat_data)
+
+    SERVER_BLUEPRINT = new_blueprint
+
+    blueprint_stream = io.BytesIO(json.dumps(SERVER_BLUEPRINT, indent=4).encode("utf-8"))
+    file = discord.File(blueprint_stream, filename=f"server_blueprint_live_{guild.id}.json")
+
+    embed = discord.Embed(
+        title="⚡ Automatic Blueprint Update Complete",
+        description=(
+            f"Successfully extracted **{len(SERVER_BLUEPRINT)}** categories into the active deployment engine.\n"
+            "Any future execution of `.setup_channels` will now recreate this topology!"
+        ),
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow()
+    )
+    await memory_ch.send(embed=embed, file=file)
+    await ctx.send(f"✅ **Server Blueprint Updated!** Active memory synced and blueprint schema saved to {memory_ch.mention}.")
+
+# ==============================================================================
+# GENERAL & ADMINISTRATIVE COMMANDS
 # ==============================================================================
 @bot.command(name="afk")
 async def afk(ctx, *, reason: str = None):
-    """Sets the user's status to AFK with custom sad/lovely messages. Disappears in 10s."""
     selected_status = reason if reason else random.choice(AFK_PRESET_MESSAGES)
     AFK_USERS[ctx.author.id] = {
         "reason": selected_status,
@@ -695,25 +1214,9 @@ async def ping(ctx):
     latency = round(bot.latency * 1000)
     await ctx.send(f"🏓 **Pong!** Bot is online. Latency: `{latency}ms`")
 
-@bot.command(name="purge")
-@commands.has_permissions(manage_messages=True)
-async def purge(ctx, amount: int = 10):
-    if amount > 100:
-        return await ctx.send("⚠️ You can only purge up to 100 messages at a time.", delete_after=5)
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-        pass
-    deleted = await ctx.channel.purge(limit=amount)
-    await ctx.send(f"🧹 Successfully cleared **{len(deleted)}** messages.", delete_after=4)
-
-# ==============================================================================
-# ADMINISTRATIVE ARCHITECTURE COMMANDS
-# ==============================================================================
 @bot.command(name="maintenance")
 @commands.has_permissions(administrator=True)
 async def maintenance(ctx):
-    """Toggles maintenance mode on or off."""
     global MAINTENANCE_MODE
     MAINTENANCE_MODE = not MAINTENANCE_MODE
 
@@ -724,129 +1227,9 @@ async def maintenance(ctx):
         await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="Chill-Verse | .setup_help"))
         await ctx.send("🛠️ **Maintenance Mode: 🔴 DISABLED**\nNormal server operations and member commands have been restored.")
 
-@bot.command(name="setup_help")
-@commands.has_permissions(administrator=True)
-async def setup_help(ctx):
-    ch = discord.utils.get(ctx.guild.text_channels, name="💼・bot-commands")
-    if not ch:
-        return await ctx.send("⚠️ Cannot find `💼・bot-commands`. Please run `.setup_channels` first.")
-
-    embed = discord.Embed(
-        title="🤖 Chill-Verse Master Command List",
-        description="Here is the complete operational suite for managing your server architecture and security.",
-        color=discord.Color.purple()
-    )
-
-    embed.add_field(
-        name="🛠️ Admin & Architecture Commands",
-        value=(
-            "`.maintenance` — 🛠️ Toggles maintenance mode on/off (locks commands for members).\n"
-            "`.setup_roles` — Auto-generates the complete 31-role hierarchy.\n"
-            "`.nuke_roles` — ☢️ Wipes all custom roles for a fresh start.\n"
-            "`.setup_channels` — Deploys the blueprint with Team/Admin restricted categories.\n"
-            "`.setup_roles_panel` — 🎨 Drops the self-assignable color & ping reaction panel.\n"
-            "`.setup_tickets` — 🎫 Deploys the support & team application control panel.\n"
-            "`.auto_team` — 🛡️ Automatically assigns all team roles and syncs category permissions.\n"
-            "`.nuke_channels` — ☢️ Wipes every channel/category (except command room).\n"
-            "`.add_channel <type> <name>` — Creates a text, voice, or forum channel on the fly.\n"
-            "`.delete_channels <#tags>` — Deletes specific tagged channels.\n"
-            "`.setup_help` — Posts this master command sheet.\n"
-            "`.backup` — Forces an immediate server JSON backup."
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="🔐 Channel Permission & Security Commands",
-        value=(
-            "`.lock` / `.unlock` — Freezes or unfreezes chat in the current room.\n"
-            "`.hide` / `.show` — Makes the current channel invisible or visible to members.\n"
-            "`.permit <role/user>` — Grants a specific role or user access to a room.\n"
-            "`.revoke <role/user>` — Removes a specific role or user's access from a room.\n"
-            "`.permit_all <role/user>` — Gives a role/user access to *every* channel at once.\n"
-            "`.revoke_all <role/user>` — Locks a role/user out of *every* channel at once.\n"
-            "`.edit_role <role> <permission> <True/False>` — Changes core server powers."
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="🛡️ Moderation & General Commands",
-        value=(
-            "`.afk [reason]` — 🌙 Sets your status to AFK (auto-deletes in 10s).\n"
-            "`.purge <number>` — Instantly bulk-deletes up to 100 messages.\n"
-            "`.ping` — Checks bot latency and server gateway connection."
-        ),
-        inline=False
-    )
-
-    embed.set_footer(text="Chill-Verse System Architecture • Prefix: .")
-    await ch.send(embed=embed)
-    await ctx.send("✅ Master command sheet successfully updated and posted to `💼・bot-commands`!")
-
-@bot.command(name="setup_tickets")
-@commands.has_permissions(administrator=True)
-async def setup_tickets(ctx):
-    ch = discord.utils.get(ctx.guild.text_channels, name="🎫・tickets")
-    if not ch:
-        return await ctx.send("⚠️ Cannot find `🎫・tickets`. Please run `.setup_channels` first.")
-
-    embed = discord.Embed(
-        title="🎫 Chill-Verse Support & Staff Applications",
-        description="Need help from staff, want to report an issue, or apply to join the Team?\n\nChoose an option using the buttons below:\n*(Note: Private tickets are visible only to Authority, Highness, and Supreme Leader)*",
-        color=discord.Color.blue()
-    )
-    await ch.send(embed=embed, view=TicketView())
-    await ctx.send("✅ Support & Application panel successfully deployed to `🎫・tickets`!")
-
-@bot.command(name="setup_roles_panel")
-@commands.has_permissions(administrator=True)
-async def setup_roles_panel(ctx):
-    ch = discord.utils.get(ctx.guild.text_channels, name="🎨・colours")
-    if not ch:
-        return await ctx.send("⚠️ Cannot find `🎨・colours`. Please run `.setup_channels` first.")
-
-    embed = discord.Embed(
-        title="🎨 Chill-Verse Custom Roles & Pings",
-        description="Click any button below to instantly toggle your favorite color or community notification pings on or off!",
-        color=discord.Color.magenta()
-    )
-    await ch.send(embed=embed, view=ReactionRoleView())
-    await ctx.send("✅ Color & Ping reaction role panel successfully deployed to `🎨・colours`!")
-
-@bot.command(name="add_channel")
-@commands.has_permissions(administrator=True)
-async def add_channel(ctx, channel_type: str, *, channel_name: str):
-    """Creates a new text, voice, or forum channel on the fly."""
-    channel_type = channel_type.lower()
-    category = ctx.channel.category
-
-    try:
-        if channel_type in ["text", "t"]:
-            new_channel = await ctx.guild.create_text_channel(name=channel_name, category=category)
-            await ctx.send(f"✅ Created text channel {new_channel.mention} in category **{category.name if category else 'None'}**!")
-        elif channel_type in ["voice", "v"]:
-            new_channel = await ctx.guild.create_voice_channel(name=channel_name, category=category)
-            await ctx.send(f"✅ Created voice channel `{new_channel.name}` in category **{category.name if category else 'None'}**!")
-        elif channel_type in ["forum", "f"]:
-            try:
-                new_channel = await ctx.guild.create_forum_channel(name=channel_name, category=category)
-                await ctx.send(f"✅ Created forum channel {new_channel.mention} in category **{category.name if category else 'None'}**!")
-            except Exception:
-                fallback_ch = await ctx.guild.create_text_channel(name=channel_name, category=category)
-                await ctx.send(f"⚠️ Could not create a forum (ensure Community is enabled). Created {fallback_ch.mention} instead.")
-        else:
-            await ctx.send("⚠️ Invalid type! Use `text`, `voice`, or `forum`.\n**Example:** `.add_channel text announcements-2`")
-    except Exception as e:
-        await ctx.send(f"⚠️ **Error creating channel:** {e}")
-
-# ==============================================================================
-# PERMISSION & SECURITY SYSTEM COMMANDS
-# ==============================================================================
 @bot.command(name="auto_team")
 @commands.has_permissions(administrator=True)
 async def auto_team(ctx):
-    """Automatically assigns all Team roles and enforces public/restricted barriers."""
     await ctx.send("🔄 **Auto-Team Sync:** Applying team roles and public/restricted barriers...")
     admin_roles = ["Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"]
     guild = ctx.guild
@@ -960,7 +1343,7 @@ async def edit_role(ctx, role: discord.Role, permission_name: str, value: bool):
         await ctx.send(f"⚠️ **Error updating role:** {e}")
 
 # ==============================================================================
-# NUKE & REBUILD ROLES
+# ROLES & BLUEPRINT DEPLOYMENT
 # ==============================================================================
 @bot.command(name="nuke_roles")
 @commands.has_permissions(administrator=True)
@@ -1042,9 +1425,6 @@ async def setup_roles(ctx):
 
     await ctx.send(f"✅ Full server role integration complete! Created **{created_count}** new roles.")
 
-# ==============================================================================
-# NUKE & REBUILD CHANNELS
-# ==============================================================================
 @bot.command(name="nuke_channels")
 @commands.has_permissions(administrator=True)
 async def nuke_channels(ctx):
@@ -1052,7 +1432,6 @@ async def nuke_channels(ctx):
     deleted_count = 0
     skipped_count = 0
 
-    # Delete non-category channels first to avoid orphan errors
     for channel in list(ctx.guild.channels):
         if channel.id == ctx.channel.id or isinstance(channel, discord.CategoryChannel):
             continue
@@ -1063,7 +1442,6 @@ async def nuke_channels(ctx):
         except Exception:
             skipped_count += 1
 
-    # Delete categories next
     for category in list(ctx.guild.categories):
         if category.id == ctx.channel.category_id:
             continue
@@ -1082,7 +1460,7 @@ async def setup_channels(ctx):
     guild = ctx.guild
     admin_roles = ["Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"]
 
-    await ctx.send("🏗️ Deploying server blueprint... Team has absolute access; only Team & Admin categories are restricted.")
+    await ctx.send("🏗️ Deploying current server blueprint... Team has absolute access; only Team & Admin categories are restricted.")
 
     for cat_data in SERVER_BLUEPRINT:
         cat_name = cat_data["category"]
@@ -1095,10 +1473,16 @@ async def setup_channels(ctx):
             ch_name = ch_info["name"]
             ch_type = ch_info["type"]
             is_restricted = ch_info.get("restricted", False)
+            is_read_only = ch_info.get("read_only", False)
             user_lim = ch_info.get("user_limit", 0)
 
             overwrites = {
-                guild.default_role: discord.PermissionOverwrite(view_channel=False if is_restricted else True),
+                guild.default_role: discord.PermissionOverwrite(
+                    view_channel=False if is_restricted else True,
+                    send_messages=False if (is_restricted or is_read_only) else True,
+                    add_reactions=True,
+                    read_message_history=True
+                ),
                 guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_channels=True)
             }
             for rname in admin_roles:
@@ -1115,8 +1499,7 @@ async def setup_channels(ctx):
                 if not existing:
                     await guild.create_voice_channel(name=ch_name, category=category, user_limit=user_lim, overwrites=overwrites)
             elif ch_type == "forum":
-                # Fixed bug: use guild.forum_channels instead of non-existent guild.forums
-                existing = discord.utils.get(guild.forum_channels, name=ch_name)
+                existing = discord.utils.get(guild.channels, name=ch_name)
                 if not existing:
                     try:
                         await guild.create_forum_channel(name=ch_name, category=category, overwrites=overwrites)
@@ -1125,71 +1508,98 @@ async def setup_channels(ctx):
 
             await asyncio.sleep(0.35)
 
-    memory_ch = discord.utils.get(guild.text_channels, name="bot-memory")
-    if not memory_ch:
-        memory_overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-        }
-        for rname in admin_roles:
-            r = discord.utils.get(guild.roles, name=rname)
-            if r:
-                memory_overwrites[r] = discord.PermissionOverwrite(view_channel=True, read_message_history=True)
-        await guild.create_text_channel(name="bot-memory", overwrites=memory_overwrites, reason="State persistence storage")
+    await get_or_create_memory_channel(guild)
+    await ctx.send("✅ Server channels deployed successfully based on the active blueprint!")
 
-    await ctx.send("✅ Chill-Verse channels deployed successfully! Team has access everywhere, and members can freely access all public categories.")
-
-@bot.command(name="delete_channels")
+@bot.command(name="setup_tickets")
 @commands.has_permissions(administrator=True)
-async def delete_channels(ctx, *channels: discord.abc.GuildChannel):
-    if not channels:
-        return await ctx.send("⚠️ Please mention the channels you want to delete. Example: `.delete_channels #channel1 #channel2`")
-
-    deleted_count = 0
-    failed_count = 0
-    current_channel_deleted = False
-    await ctx.send(f"🗑️ Attempting to delete {len(channels)} channel(s)...")
-
-    for channel in channels:
-        if channel.id == ctx.channel.id:
-            current_channel_deleted = True
-            continue
-        try:
-            await channel.delete(reason=f"Batch manual deletion requested by {ctx.author}")
-            deleted_count += 1
-            await asyncio.sleep(0.35)
-        except Exception:
-            failed_count += 1
-
-    if current_channel_deleted:
-        try:
-            await ctx.channel.delete(reason=f"Batch manual deletion requested by {ctx.author}")
-            return
-        except Exception:
-            failed_count += 1
-
-    await ctx.send(f"✅ Channel deletion complete! Successfully deleted **{deleted_count}** channel(s). Failed: **{failed_count}**.")
-
-@bot.command(name="backup")
-@commands.has_permissions(administrator=True)
-async def backup(ctx):
-    guild = ctx.guild
-    ch = discord.utils.get(guild.text_channels, name="🩸・bot-errors")
+async def setup_tickets(ctx):
+    ch = discord.utils.get(ctx.guild.text_channels, name="🎫・tickets")
     if not ch:
-        return await ctx.send("⚠️ Cannot find `🩸・bot-errors` to store the data.", delete_after=5)
+        return await ctx.send("⚠️ Cannot find `🎫・tickets`. Please run `.setup_channels` first.")
 
-    backup_data = {
-        "server_name": guild.name,
-        "roles": [{"name": role.name, "permissions": role.permissions.value} for role in guild.roles],
-        "text_channels": [{"name": channel.name, "category": str(channel.category)} for channel in guild.text_channels]
-    }
+    embed = discord.Embed(
+        title="🎫 Chill-Verse Support & Staff Applications",
+        description="Need help from staff, want to report an issue, or apply to join the Team?\n\nChoose an option using the buttons below:\n*(Note: Private tickets are visible only to Authority, Highness, and Supreme Leader)*",
+        color=discord.Color.blue()
+    )
+    await ch.send(embed=embed, view=TicketView())
+    await ctx.send("✅ Support & Application panel successfully deployed to `🎫・tickets`!")
 
-    file = discord.File(io.BytesIO(json.dumps(backup_data, indent=4).encode("utf-8")), filename="server_backup.json")
-    try:
-        await ch.send(content=f"🔒 **Manual Backup triggered by {ctx.author.mention}**", file=file)
-        await ctx.send("✅ Backup completed successfully!", delete_after=5)
-    except Exception as e:
-        await ctx.send(f"⚠️ Failed to upload backup: {e}", delete_after=5)
+@bot.command(name="setup_roles_panel")
+@commands.has_permissions(administrator=True)
+async def setup_roles_panel(ctx):
+    ch = discord.utils.get(ctx.guild.text_channels, name="🎨・colours")
+    if not ch:
+        return await ctx.send("⚠️ Cannot find `🎨・colours`. Please run `.setup_channels` first.")
+
+    embed = discord.Embed(
+        title="🎨 Chill-Verse Custom Roles & Pings",
+        description="Click any button below to instantly toggle your favorite color or community notification pings on or off!",
+        color=discord.Color.magenta()
+    )
+    await ch.send(embed=embed, view=ReactionRoleView())
+    await ctx.send("✅ Color & Ping reaction role panel successfully deployed to `🎨・colours`!")
+
+@bot.command(name="setup_help")
+@commands.has_permissions(administrator=True)
+async def setup_help(ctx):
+    ch = discord.utils.get(ctx.guild.text_channels, name="💼・bot-commands")
+    if not ch:
+        return await ctx.send("⚠️ Cannot find `💼・bot-commands`. Please run `.setup_channels` first.")
+
+    embed = discord.Embed(
+        title="🤖 Arkbot Master Command Manual",
+        description="Full operational suite for Chill-Verse architecture, permission memory, and automated backups.",
+        color=discord.Color.purple()
+    )
+
+    embed.add_field(
+        name="📢 High Command Broadcast",
+        value=(
+            "`.announce <text>` — Sends an official broadcast to `📢・announcements`.\n"
+            "`.announce <Title> | <Content> [--everyone/--here]` — Posts an embed broadcast with role pings.\n"
+            "*(Only High Command can post; regular members can only read and view.)*"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🧹 Security & Purge Suite",
+        value=(
+            "`.purge <amount> [user/bots/links]` — Authority surgical cleaner (up to 1,000 unpinned).\n"
+            "`.remove_bot_role <@role / @bot / all>` — Locks bot roles out of the current channel."
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="💾 Memory & Backup Commands",
+        value=(
+            "`.backup` — Raw JSON backup to `🩸・bot-errors` (Retains latest 3).\n"
+            "`.backup_perms` — Snapshots all channel and category permissions into `bot-memory`.\n"
+            "`.backup_channels` — Backs up complete channel names, types, and hierarchy.\n"
+            "`.update_blueprint` — ⚡ Auto-syncs live server channels to blueprint in memory."
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🛠️ Architecture & Setup",
+        value=(
+            "`.setup_channels` — Deploys current blueprint.\n"
+            "`.setup_roles` — Generates full 31-role hierarchy.\n"
+            "`.setup_tickets` — Drops ticket & application panel.\n"
+            "`.setup_roles_panel` — Drops self-assignable role buttons.\n"
+            "`.auto_team` — Synchronizes team permissions server-wide.\n"
+            "`.maintenance` — Toggles server lockdown mode."
+        ),
+        inline=False
+    )
+
+    embed.set_footer(text="Arkbot Architecture Engine • Prefix: .")
+    await ch.send(embed=embed)
+    await ctx.send("✅ Command manual posted to `💼・bot-commands`!")
 
 # ==============================================================================
 # RUN BOT
