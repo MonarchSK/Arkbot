@@ -407,9 +407,9 @@ def is_authority_holder():
             return False
         if getattr(ctx.author.guild_permissions, "administrator", False):
             return True
-        authority_roles = {"Supreme Leader", "Highness", "Authority"}
-        user_roles = getattr(ctx.author, "roles", [])
-        if any(role.name in authority_roles for role in user_roles):
+        authority_roles = {"supreme leader", "highness", "authority"}
+        user_roles = {r.name.lower().strip() for r in getattr(ctx.author, "roles", [])}
+        if bool(authority_roles.intersection(user_roles)):
             return True
         raise commands.CheckFailure("⛔ **Restricted:** Only Administrators and Authority holders can execute this command.")
     return commands.check(predicate)
@@ -417,21 +417,14 @@ def is_authority_holder():
 def is_team_member(member: Union[discord.Member, discord.User]) -> bool:
     if not isinstance(member, discord.Member):
         return False
-    if member.guild_permissions.administrator:
+    if getattr(member.guild_permissions, "administrator", False):
         return True
-    team_roles = {"Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"}
-    return any(role.name in team_roles for role in member.roles)
-
-def is_allowed_channel(channel: Any, member: Optional[Union[discord.Member, discord.User]] = None) -> bool:
-    if member and is_team_member(member):
-        return True
-    ch_name = getattr(channel, "name", "").lower()
-    if "playground" in ch_name:
-        return False
-    category = getattr(channel, "category", None)
-    if category and "music" in category.name.lower():
-        return False
-    return True
+    team_roles = {
+        "supreme leader", "highness", "authority",
+        "head moderator", "moderator", "trial mod", "chill-verse team"
+    }
+    user_roles = {r.name.lower().strip() for r in getattr(member, "roles", [])}
+    return bool(team_roles.intersection(user_roles))
 
 def resolve_guild_context(interaction: discord.Interaction) -> Optional[discord.Guild]:
     if interaction.guild:
@@ -611,7 +604,6 @@ async def generate_unified_backup_payload(guild: discord.Guild) -> Dict[str, Any
     }
 
 async def apply_unified_restore(guild: discord.Guild, data: Dict[str, Any]) -> Dict[str, int]:
-    """NON-DESTRUCTIVE: Skips existing channels and never alters existing permission overwrites."""
     global SERVER_BLUEPRINT, LAST_BUMP_TIME
 
     stats = {
@@ -721,7 +713,7 @@ async def apply_unified_restore(guild: discord.Guild, data: Dict[str, Any]) -> D
     return stats
 
 # ==============================================================================
-# BUMP NOTIFICATION & STRICT LOCK ENGINE
+# BUMP NOTIFICATION ENGINE
 # ==============================================================================
 def get_bump_role_mentions(guild: discord.Guild) -> str:
     bump_role = discord.utils.find(
@@ -741,7 +733,6 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
         return
 
     try:
-        # Phase 1: 15-Minute Advance Reminder (6,300s = 1h 45m)
         await asyncio.sleep(6300)
         pings = get_bump_role_mentions(guild)
         msg_15m = random.choice(BUMP_15M_MESSAGES)
@@ -759,7 +750,6 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
         reminder_embed.set_footer(text="Chill-Verse Bump Watch • 15 Minute Notice")
         await target_channel.send(content=pings, embed=reminder_embed)
 
-        # Phase 2: Ready Alert (900s = 15m)
         await asyncio.sleep(900)
         pings = get_bump_role_mentions(guild)
         msg_ready = random.choice(BUMP_READY_MESSAGES)
@@ -1266,13 +1256,18 @@ bot = ArkBot()
 
 @bot.check
 async def check_maintenance_mode(ctx: commands.Context):
+    # If maintenance is OFF, allow all commands unconditionally
     if not MAINTENANCE_MODE:
         return True
 
+    # Allow the maintenance command itself so it can be toggled back on/off
+    if ctx.command and ctx.command.name in ["maintenance", "shutdown"]:
+        return True
+
     is_admin = getattr(getattr(ctx.author, "guild_permissions", None), "administrator", False)
-    staff_roles = {"Supreme Leader", "Highness", "Authority"}
-    user_roles = getattr(ctx.author, "roles", [])
-    is_high_command = any(role.name in staff_roles for role in user_roles)
+    staff_roles = {"supreme leader", "highness", "authority"}
+    user_roles = {r.name.lower().strip() for r in getattr(ctx.author, "roles", [])}
+    is_high_command = bool(staff_roles.intersection(user_roles))
 
     if is_admin or is_high_command:
         return True
@@ -1378,12 +1373,12 @@ async def on_member_remove(member: discord.Member):
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: Exception):
+    print(f"DEBUG: Command [{ctx.command}] failed -> {type(error).__name__}: {error}")
     if isinstance(error, commands.CheckFailure):
         return await ctx.send(str(error), delete_after=6)
     if isinstance(error, commands.CommandNotFound):
         return
-    await ctx.send(f"⚠️ **Command Error:** {error}", delete_after=8)
-    print(f"Command Error in {ctx.command}: {error}")
+    await ctx.send(f"⚠️ **Command Error:** `{error}`", delete_after=8)
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -1506,10 +1501,7 @@ async def on_message(message: discord.Message):
                     except discord.HTTPException:
                         pass
 
-    # 5. Route Allowed Commands
-    if not is_allowed_channel(message.channel, message.author):
-        return
-
+    # 5. Route Allowed Commands (Unconditionally process commands)
     await bot.process_commands(message)
 
 # ==============================================================================
@@ -1615,6 +1607,11 @@ async def birthday_announcer_task():
 # ==============================================================================
 # GENERAL & ADMINISTRATIVE COMMANDS
 # ==============================================================================
+@bot.command(name="ping")
+async def ping(ctx: commands.Context):
+    latency = round(bot.latency * 1000)
+    await ctx.send(f"🏓 **Pong!** Latency: `{latency}ms`")
+
 @bot.command(name="bump")
 async def bump(ctx: commands.Context):
     global LAST_BUMP_TIME, BUMP_TIMER_TASK
