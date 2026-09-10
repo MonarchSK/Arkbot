@@ -17,6 +17,10 @@ intents.members = True
 bot = commands.Bot(command_prefix=".", intents=intents)
 bot.remove_command('help') 
 
+# State variables
+UPDATE_NOTIFIED = False
+MAINTENANCE_MODE = False
+
 def is_allowed_channel(channel):
     """Prevents commands from working in Playground or Music categories."""
     if not isinstance(channel, discord.TextChannel):
@@ -27,8 +31,24 @@ def is_allowed_channel(channel):
         return False
     return True
 
+@bot.check
+async def check_maintenance_mode(ctx):
+    """Restricts command execution during maintenance mode to High Command only."""
+    if not MAINTENANCE_MODE:
+        return True
+        
+    # High Command and Admins bypass maintenance mode
+    staff_roles = ["Supreme Leader", "Highness", "Authority"]
+    is_high_command = any(role.name in staff_roles for role in ctx.author.roles) if hasattr(ctx.author, 'roles') else False
+    
+    if ctx.author.guild_permissions.administrator or is_high_command:
+        return True
+        
+    await ctx.send("🛠️ **Maintenance Mode Active:** Arkbot is currently undergoing maintenance. Regular commands are temporarily disabled.", delete_after=6)
+    return False
+
 # ==============================================================================
-# CUSTOM BLUEPRINT CONFIGURATION (FROM SCREENSHOTS)
+# CUSTOM BLUEPRINT CONFIGURATION
 # ==============================================================================
 SERVER_BLUEPRINT = [
     {
@@ -129,7 +149,7 @@ SERVER_BLUEPRINT = [
 ]
 
 # ==============================================================================
-# AUTO-PERMISSION & PRECISE CATEGORY RESTRICTION ENFORCEMENT
+# AUTO-PERMISSION ENFORCEMENT
 # ==============================================================================
 async def auto_configure_channel(channel):
     """Ensures Team roles have access to ALL channels, while members are restricted ONLY to Team and Admin categories."""
@@ -140,11 +160,7 @@ async def auto_configure_channel(channel):
     admin_roles = ["Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"]
     
     cat_name = channel.category.name if channel.category else ""
-    
-    # Strictly restrict ONLY Team and Admin categories from regular members
-    is_restricted = False
-    if cat_name in ["Team <3", "Admin Area 🔒"] or channel.name == "bot-memory":
-        is_restricted = True
+    is_restricted = cat_name in ["Team <3", "Admin Area 🔒"] or channel.name == "bot-memory"
         
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False if is_restricted else True)
@@ -161,7 +177,7 @@ async def auto_configure_channel(channel):
         pass
 
 # ==============================================================================
-# UI COMPONENTS (MODALS, TICKETS & BUTTONS)
+# UI COMPONENTS (MODALS, TICKETS, APPLICATIONS & REACTION ROLES)
 # ==============================================================================
 class VerificationModal(Modal, title="Server Verification Form"):
     real_full_name = TextInput(label="Real Full Name", placeholder="John Doe", required=True, max_length=50)
@@ -187,6 +203,26 @@ class VerificationModal(Modal, title="Server Verification Form"):
                 await log_channel.send(embed=embed)
 
         await interaction.response.send_message("Verification complete! You now have access to Chill-Verse.", ephemeral=True)
+
+class TeamApplicationModal(Modal, title="Staff Team Application"):
+    age_tz = TextInput(label="Age & Timezone", placeholder="18, EST", required=True, max_length=50)
+    experience = TextInput(label="Previous Experience", style=discord.TextStyle.paragraph, placeholder="List past moderation experience...", required=True, max_length=300)
+    reason = TextInput(label="Why do you want to join the Team?", style=discord.TextStyle.paragraph, placeholder="Tell us why we should choose you...", required=True, max_length=500)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        team_channel = discord.utils.get(guild.text_channels, name="💬・team-chat") or discord.utils.get(guild.text_channels, name="team-news")
+        
+        embed = discord.Embed(title="🚨 New Staff Application Submitted", color=discord.Color.gold(), timestamp=discord.utils.utcnow())
+        embed.add_field(name="Applicant", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Age & Timezone", value=self.age_tz.value, inline=True)
+        embed.add_field(name="Previous Experience", value=self.experience.value, inline=False)
+        embed.add_field(name="Reason to Join", value=self.reason.value, inline=False)
+        
+        if team_channel:
+            await team_channel.send(embed=embed)
+        
+        await interaction.response.send_message("✅ Your application has been successfully submitted to the Team for review!", ephemeral=True)
 
 class RulesView(View):
     def __init__(self):
@@ -232,7 +268,7 @@ class TicketView(View):
             guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
         }
         
-        staff_roles = ["Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator"]
+        staff_roles = ["Supreme Leader", "Highness", "Authority"]
         for rname in staff_roles:
             role = discord.utils.get(guild.roles, name=rname)
             if role:
@@ -247,12 +283,68 @@ class TicketView(View):
         
         embed = discord.Embed(
             title="🎫 Support Ticket",
-            description=f"Welcome {interaction.user.mention}! Please describe your issue or application here. A staff member will be with you shortly.",
+            description=f"Welcome {interaction.user.mention}! Please describe your issue here. Only high command can see this ticket.",
             color=discord.Color.blue()
         )
         
         await ticket_ch.send(embed=embed, view=CloseTicketView())
         await interaction.response.send_message(f"✅ Ticket created successfully: {ticket_ch.mention}", ephemeral=True)
+
+    @discord.ui.button(label="Apply for Team", style=discord.ButtonStyle.green, custom_id="apply_team", emoji="🛡️")
+    async def apply_team(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(TeamApplicationModal())
+
+class ReactionRoleView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def toggle_role(self, interaction: discord.Interaction, role_name: str):
+        role = discord.utils.get(interaction.guild.roles, name=role_name)
+        if not role:
+            return await interaction.response.send_message(f"⚠️ Error: The role `{role_name}` does not exist yet! Run `.setup_roles` first.", ephemeral=True)
+        
+        if role in interaction.user.roles:
+            await interaction.user.remove_roles(role)
+            await interaction.response.send_message(f"❌ Removed role: **{role.name}**", ephemeral=True)
+        else:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"✅ Added role: **{role.name}**", ephemeral=True)
+
+    @discord.ui.button(label="🔴 Red", style=discord.ButtonStyle.secondary, custom_id="role_red", row=0)
+    async def red_role(self, interaction: discord.Interaction, button: Button):
+        await self.toggle_role(interaction, "Red")
+
+    @discord.ui.button(label="🟡 Yellow", style=discord.ButtonStyle.secondary, custom_id="role_yellow", row=0)
+    async def yellow_role(self, interaction: discord.Interaction, button: Button):
+        await self.toggle_role(interaction, "Yellow")
+
+    @discord.ui.button(label="🟢 Green", style=discord.ButtonStyle.secondary, custom_id="role_green", row=0)
+    async def green_role(self, interaction: discord.Interaction, button: Button):
+        await self.toggle_role(interaction, "Green")
+
+    @discord.ui.button(label="🔵 Blue", style=discord.ButtonStyle.secondary, custom_id="role_blue", row=1)
+    async def blue_role(self, interaction: discord.Interaction, button: Button):
+        await self.toggle_role(interaction, "Blue")
+
+    @discord.ui.button(label="🟠 Orange", style=discord.ButtonStyle.secondary, custom_id="role_orange", row=1)
+    async def orange_role(self, interaction: discord.Interaction, button: Button):
+        await self.toggle_role(interaction, "Orange")
+
+    @discord.ui.button(label="🩷 Pink", style=discord.ButtonStyle.secondary, custom_id="role_pink", row=1)
+    async def pink_role(self, interaction: discord.Interaction, button: Button):
+        await self.toggle_role(interaction, "Pink")
+
+    @discord.ui.button(label="⏰ Bump Pings", style=discord.ButtonStyle.primary, custom_id="role_bump", row=2)
+    async def bump_role(self, interaction: discord.Interaction, button: Button):
+        await self.toggle_role(interaction, "Bump Pings")
+
+    @discord.ui.button(label="📊 Poll Pings", style=discord.ButtonStyle.primary, custom_id="role_poll", row=2)
+    async def poll_role(self, interaction: discord.Interaction, button: Button):
+        await self.toggle_role(interaction, "Poll Pings")
+
+    @discord.ui.button(label="🎮 Roblox Members", style=discord.ButtonStyle.primary, custom_id="role_roblox", row=2)
+    async def roblox_role(self, interaction: discord.Interaction, button: Button):
+        await self.toggle_role(interaction, "Roblox Members")
 
 # ==============================================================================
 # EVENTS & TASKS
@@ -264,17 +356,49 @@ async def on_ready():
     bot.add_view(RulesView())
     bot.add_view(TicketView())
     bot.add_view(CloseTicketView())
+    bot.add_view(ReactionRoleView())
     
+    # Auto-notification to team-news upon deployment
+    global UPDATE_NOTIFIED
+    if not UPDATE_NOTIFIED:
+        for guild in bot.guilds:
+            team_news_ch = discord.utils.get(guild.text_channels, name="team-news")
+            if team_news_ch:
+                embed = discord.Embed(
+                    title="🚀 Arkbot Updated — New Features Added!",
+                    description="Arkbot has just been successfully updated with the latest system features.",
+                    color=discord.Color.green(),
+                    timestamp=discord.utils.utcnow()
+                )
+                embed.add_field(
+                    name="✨ Latest Features & Upgrades",
+                    value=(
+                        "• **Maintenance Mode:** High Command can now lock down the bot with `.maintenance`.\n"
+                        "• **High Command Tickets:** Tickets are strictly visible to Supreme Leader, Highness, and Authority.\n"
+                        "• **Auto-Team Permissions:** Team roles are automatically synced across all categories.\n"
+                        "• **Staff Applications:** Embedded team application forms directly in `🎫・tickets`.\n"
+                        "• **Reaction Roles:** Persistent color and notification ping buttons deployed in `🎨・colours`."
+                    ),
+                    inline=False
+                )
+                embed.set_footer(text="Chill-Verse Architecture • Automatic Deployment Notice")
+                try:
+                    await team_news_ch.send(embed=embed)
+                except Exception:
+                    pass
+        UPDATE_NOTIFIED = True
+
     if not hourly_backup_task.is_running():
         hourly_backup_task.start()
 
 @bot.event
 async def on_guild_channel_create(channel):
-    """Automatically secures newly created channels in real-time."""
     await auto_configure_channel(channel)
 
 @bot.event
 async def on_command_error(ctx, error):
+    if isinstance(error, commands.CheckFailure):
+        return
     await ctx.send(f"⚠️ **DEBUG ERROR:** {error}")
     print(f"Command Error: {error}")
 
@@ -343,6 +467,20 @@ async def purge(ctx, amount: int = 10):
 # ==============================================================================
 # ADMINISTRATIVE ARCHITECTURE COMMANDS
 # ==============================================================================
+@bot.command(name="maintenance")
+@commands.has_permissions(administrator=True)
+async def maintenance(ctx):
+    """Toggles maintenance mode on or off."""
+    global MAINTENANCE_MODE
+    MAINTENANCE_MODE = not MAINTENANCE_MODE
+    
+    if MAINTENANCE_MODE:
+        await bot.change_presence(status=discord.Status.dnd, activity=discord.Game(name="⚠️ Under Maintenance"))
+        await ctx.send("🛠️ **Maintenance Mode: 🟢 ENABLED**\nRegular member commands are locked. High Command and Admins retain full access.")
+    else:
+        await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="Chill-Verse | .setup_help"))
+        await ctx.send("🛠️ **Maintenance Mode: 🔴 DISABLED**\nNormal server operations and member commands have been restored.")
+
 @bot.command(name="setup_help")
 @commands.has_permissions(administrator=True)
 async def setup_help(ctx):
@@ -359,14 +497,16 @@ async def setup_help(ctx):
     embed.add_field(
         name="🛠️ Admin & Architecture Commands", 
         value=(
+            "`.maintenance` — 🛠️ Toggles maintenance mode on/off (locks commands for members).\n"
             "`.setup_roles` — Auto-generates the complete 31-role hierarchy.\n"
             "`.nuke_roles` — ☢️ Wipes all custom roles for a fresh start.\n"
             "`.setup_channels` — Deploys the blueprint with Team/Admin restricted categories.\n"
+            "`.setup_roles_panel` — 🎨 Drops the self-assignable color & ping reaction panel.\n"
+            "`.setup_tickets` — 🎫 Deploys the support & team application control panel.\n"
             "`.auto_team` — 🛡️ Automatically assigns all team roles and syncs category permissions.\n"
             "`.nuke_channels` — ☢️ Wipes every channel/category (except command room).\n"
             "`.add_channel <type> <name>` — Creates a text, voice, or forum channel on the fly.\n"
             "`.delete_channels <#tags>` — Deletes specific tagged channels.\n"
-            "`.setup_tickets` — Drops the interactive support ticket panel.\n"
             "`.setup_help` — Posts this master command sheet.\n"
             "`.backup` — Forces an immediate server JSON backup."
         ), 
@@ -409,12 +549,27 @@ async def setup_tickets(ctx):
         return await ctx.send("⚠️ Cannot find `🎫・tickets`. Please run `.setup_channels` first.")
         
     embed = discord.Embed(
-        title="🎫 Chill-Verse Support & Applications",
-        description="Need help from staff, want to report an issue, or apply for a team role?\n\nClick the button below to open a private ticket.",
+        title="🎫 Chill-Verse Support & Staff Applications",
+        description="Need help from staff, want to report an issue, or apply to join the Team?\n\nChoose an option using the buttons below:\n*(Note: Private tickets are visible only to Authority, Highness, and Supreme Leader)*",
         color=discord.Color.blue()
     )
     await ch.send(embed=embed, view=TicketView())
-    await ctx.send("✅ Ticket system deployed to `🎫・tickets`!")
+    await ctx.send("✅ Support & Application panel successfully deployed to `🎫・tickets`!")
+
+@bot.command(name="setup_roles_panel")
+@commands.has_permissions(administrator=True)
+async def setup_roles_panel(ctx):
+    ch = discord.utils.get(ctx.guild.text_channels, name="🎨・colours")
+    if not ch:
+        return await ctx.send("⚠️ Cannot find `🎨・colours`. Please run `.setup_channels` first.")
+        
+    embed = discord.Embed(
+        title="🎨 Chill-Verse Custom Roles & Pings",
+        description="Click any button below to instantly toggle your favorite color or community notification pings on or off!",
+        color=discord.Color.magenta()
+    )
+    await ch.send(embed=embed, view=ReactionRoleView())
+    await ctx.send("✅ Color & Ping reaction role panel successfully deployed to `🎨・colours`!")
 
 @bot.command(name="add_channel")
 @commands.has_permissions(administrator=True)
@@ -451,7 +606,6 @@ async def auto_team(ctx):
     await ctx.send("🔄 **Auto-Team Sync:** Applying team roles and public/restricted barriers...")
     admin_roles = ["Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"]
     guild = ctx.guild
-    count = 0
     
     for category in guild.categories:
         cat_name = category.name
@@ -468,6 +622,7 @@ async def auto_team(ctx):
         except Exception:
             pass
 
+    count = 0
     for channel in guild.channels:
         if isinstance(channel, discord.CategoryChannel):
             continue
