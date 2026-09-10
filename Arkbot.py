@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 from discord.ui import Button, View, Modal, TextInput
+from typing import Union
 import datetime
 import json
 import io
@@ -18,7 +19,7 @@ intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix=".", intents=intents)
-bot.remove_command('help') 
+bot.remove_command('help')
 
 # State tracking
 UPDATE_NOTIFIED = False
@@ -227,7 +228,10 @@ class VerificationModal(Modal, title="Server Verification Form"):
         if guild:
             role = discord.utils.get(guild.roles, name="Member")
             if role:
-                await interaction.user.add_roles(role)
+                try:
+                    await interaction.user.add_roles(role)
+                except discord.Forbidden:
+                    pass
             
             log_channel = discord.utils.get(guild.text_channels, name="💼・bot-commands")
             if log_channel:
@@ -285,7 +289,10 @@ class CloseTicketView(View):
     async def close_ticket(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_message("🔒 This ticket will be deleted in 5 seconds...")
         await asyncio.sleep(5)
-        await interaction.channel.delete(reason="User closed ticket.")
+        try:
+            await interaction.channel.delete(reason="User closed ticket.")
+        except discord.HTTPException:
+            pass
 
 class TicketView(View):
     def __init__(self):
@@ -521,7 +528,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # Check if author is returning from AFK (ignore the .afk command invocation itself)
+    # Check if author is returning from AFK
     if message.author.id in AFK_USERS and not message.content.strip().startswith(f"{bot.command_prefix}afk"):
         del AFK_USERS[message.author.id]
         welcome_template = random.choice(AFK_WELCOME_MESSAGES)
@@ -531,7 +538,7 @@ async def on_message(message):
         )
         await message.channel.send(embed=welcome_embed, delete_after=10)
 
-    # Check if message mentions someone who is currently AFK
+    # Check if message mentions someone who is AFK
     if message.mentions and not message.author.bot:
         for mentioned in message.mentions:
             if mentioned.id in AFK_USERS:
@@ -546,17 +553,23 @@ async def on_message(message):
     if isinstance(message.author, discord.Member) and not is_team_member(message.author):
         # 1. Anti-Invite filter
         if INVITE_REGEX.search(message.content):
-            await message.delete()
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
             return await message.channel.send(f"⚠️ {message.author.mention}, posting invite links is prohibited here!", delete_after=4)
 
         # 2. Anti-Spam rate limiter (More than 5 messages within 4 seconds)
-        now = datetime.datetime.now().timestamp()
+        now = discord.utils.utcnow().timestamp()
         timestamps = USER_MESSAGE_TIMESTAMPS[message.author.id]
         timestamps.append(now)
         USER_MESSAGE_TIMESTAMPS[message.author.id] = [t for t in timestamps if now - t < 4.0]
         
         if len(USER_MESSAGE_TIMESTAMPS[message.author.id]) > 5:
-            await message.delete()
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
             return await message.channel.send(f"⚠️ {message.author.mention}, please slow down! You are sending messages too quickly.", delete_after=4)
 
     if not is_allowed_channel(message.channel):
@@ -573,7 +586,7 @@ async def afk(ctx, *, reason: str = None):
     selected_status = reason if reason else random.choice(AFK_PRESET_MESSAGES)
     AFK_USERS[ctx.author.id] = {
         "reason": selected_status,
-        "time": datetime.datetime.utcnow()
+        "time": discord.utils.utcnow()
     }
     
     embed = discord.Embed(
@@ -583,7 +596,7 @@ async def afk(ctx, *, reason: str = None):
     await ctx.send(embed=embed, delete_after=10)
     try:
         await ctx.message.delete()
-    except Exception:
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
         pass
 
 @bot.command(name="ping")
@@ -596,7 +609,10 @@ async def ping(ctx):
 async def purge(ctx, amount: int = 10):
     if amount > 100:
         return await ctx.send("⚠️ You can only purge up to 100 messages at a time.", delete_after=5)
-    await ctx.message.delete()
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        pass
     deleted = await ctx.channel.purge(limit=amount)
     await ctx.send(f"🧹 Successfully cleared **{len(deleted)}** messages.", delete_after=4)
 
@@ -755,19 +771,17 @@ async def auto_team(ctx):
                 overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         try:
             await category.edit(overwrites=overwrites, reason="Auto-team category permission sync")
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.35)
         except Exception:
             pass
 
-    count = 0
     for channel in guild.channels:
         if isinstance(channel, discord.CategoryChannel):
             continue
         await auto_configure_channel(channel)
-        count += 1
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.35)
             
-    await ctx.send(f"✅ **Auto-Team Complete:** Team roles assigned everywhere. Only **Team <3** and **Admin Area 🔒** are restricted from the public!")
+    await ctx.send("✅ **Auto-Team Complete:** Team roles assigned everywhere. Only **Team <3** and **Admin Area 🔒** are restricted from the public!")
 
 @bot.command(name="lock")
 @commands.has_permissions(manage_channels=True)
@@ -795,40 +809,40 @@ async def show(ctx):
 
 @bot.command(name="permit")
 @commands.has_permissions(manage_channels=True)
-async def permit(ctx, target: discord.Role | discord.Member):
+async def permit(ctx, target: Union[discord.Member, discord.Role]):
     await ctx.channel.set_permissions(target, view_channel=True, send_messages=True, read_message_history=True)
     await ctx.send(f"✅ **Access Granted:** {target.mention} can now view and type in this channel.")
 
 @bot.command(name="revoke")
 @commands.has_permissions(manage_channels=True)
-async def revoke(ctx, target: discord.Role | discord.Member):
+async def revoke(ctx, target: Union[discord.Member, discord.Role]):
     await ctx.channel.set_permissions(target, view_channel=False, send_messages=False)
     await ctx.send(f"❌ **Access Revoked:** {target.mention} has been removed from this channel.")
 
 @bot.command(name="permit_all")
 @commands.has_permissions(administrator=True)
-async def permit_all(ctx, target: discord.Role | discord.Member):
+async def permit_all(ctx, target: Union[discord.Member, discord.Role]):
     await ctx.send(f"🔄 **Global Sync:** Granting {target.mention} access to all channels... Please wait.")
     count = 0
     for channel in ctx.guild.channels:
         try:
             await channel.set_permissions(target, view_channel=True, send_messages=True, read_message_history=True)
             count += 1
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.35)
         except Exception:
             pass
     await ctx.send(f"✅ **Global Access Granted:** {target.mention} can now view and type in **{count}** channels!")
 
 @bot.command(name="revoke_all")
 @commands.has_permissions(administrator=True)
-async def revoke_all(ctx, target: discord.Role | discord.Member):
+async def revoke_all(ctx, target: Union[discord.Member, discord.Role]):
     await ctx.send(f"🔄 **Global Sync:** Revoking {target.mention}'s access from all channels... Please wait.")
     count = 0
     for channel in ctx.guild.channels:
         try:
             await channel.set_permissions(target, view_channel=False, send_messages=False)
             count += 1
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.35)
         except Exception:
             pass
     await ctx.send(f"❌ **Global Access Revoked:** {target.mention} has been completely locked out of **{count}** channels.")
@@ -867,7 +881,7 @@ async def nuke_roles(ctx):
         try:
             await role.delete(reason=f"Role Nuke initiated by {ctx.author}")
             deleted_count += 1
-            await asyncio.sleep(0.35)
+            await asyncio.sleep(0.4)
         except Exception as e:
             skipped_count += 1
             print(f"Skipped role {role.name}: {e}")
@@ -950,7 +964,7 @@ async def nuke_channels(ctx):
         try:
             await channel.delete(reason=f"Server Nuke initiated by {ctx.author}")
             deleted_count += 1
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.35)
         except Exception as e:
             skipped_count += 1
             print(f"Failed to delete channel {channel.name}: {e}")
@@ -1002,7 +1016,7 @@ async def setup_channels(ctx):
                     except Exception:
                         await guild.create_text_channel(name=ch_name, category=category, overwrites=overwrites)
 
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.35)
 
     memory_ch = discord.utils.get(guild.text_channels, name="bot-memory")
     if not memory_ch:
