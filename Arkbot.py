@@ -437,7 +437,6 @@ def is_authority_holder():
     async def predicate(ctx: commands.Context):
         if not ctx.guild:
             return False
-        # Server Owner and Administrators always bypass
         if ctx.author.id == ctx.guild.owner_id or getattr(ctx.author.guild_permissions, "administrator", False):
             return True
         authority_roles = {"supreme leader", "highness", "authority"}
@@ -547,7 +546,6 @@ async def get_or_create_memory_channel(guild: discord.Guild) -> discord.TextChan
     )
 
 async def purge_all_old_backups(channel: discord.TextChannel, keep_count: int = 1):
-    """Deletes old bot backup messages from channel history, preserving only newest."""
     try:
         backup_messages = []
         async for msg in channel.history(limit=100):
@@ -1336,9 +1334,10 @@ class ArkBot(commands.Bot):
         super().__init__(
             command_prefix=".",
             intents=intents,
-            strip_after_prefix=True,  # Enables commands typed as '.command' or '. command'
+            strip_after_prefix=True,
         )
         self.remove_command("help")
+        self.first_run_completed: bool = False
 
     async def setup_hook(self):
         await restore_runtime_state()
@@ -1348,7 +1347,6 @@ class ArkBot(commands.Bot):
         self.add_view(CloseTicketView())
         self.add_view(ReactionRoleView())
 
-        # Auto-restore check per guild on startup
         asyncio.create_task(self._auto_restore_all_guilds())
 
         if not hourly_backup_task.is_running():
@@ -1373,7 +1371,6 @@ class ArkBot(commands.Bot):
                     f"[Auto-Boot] Restored {stats['channels_created']} missing channels in {guild.name}."
                 )
 
-        # Resume bump timer if interrupted during restart
         if LAST_BUMP_TIME:
             elapsed = (datetime.datetime.now(datetime.timezone.utc) - LAST_BUMP_TIME).total_seconds()
             if elapsed < BUMP_COOLDOWN_SECONDS and self.guilds:
@@ -1411,14 +1408,17 @@ async def check_maintenance_mode(ctx: commands.Context):
 # ==============================================================================
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} — Chill-Verse fully operational.")
+    print(f"Logged in as {bot.user} — Chill-Verse operational.")
     global UPDATE_NOTIFIED
+
+    if bot.first_run_completed:
+        return
+    bot.first_run_completed = True
 
     for guild in bot.guilds:
         await deploy_team_rules_panel(guild, bot.command_prefix)
         await get_or_create_audit_channel(guild)
 
-        # Reboot snapshot: generates fresh backup and purges all previous ones in error channel
         err_channel = discord.utils.get(guild.text_channels, name="🩸・bot-errors")
         if err_channel:
             payload = await generate_unified_backup_payload(guild)
@@ -1432,7 +1432,6 @@ async def on_ready():
                 content="🔒 **Automated Fresh Reboot Snapshot (Previous backups purged)**",
                 file=backup_file,
             )
-            # Purge all older backups so only the newest remains
             await purge_all_old_backups(err_channel, keep_count=1)
 
     if not UPDATE_NOTIFIED:
@@ -1572,8 +1571,12 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # 1. AFK Return Greeting
-    if message.author.id in AFK_USERS and not message.content.strip().startswith(f"{bot.command_prefix}afk"):
+    ctx = await bot.get_context(message)
+
+    # 1. AFK Return Greeting (Bypassed if triggering the .afk command itself)
+    if message.author.id in AFK_USERS and ctx.command and ctx.command.name == "afk":
+        pass
+    elif message.author.id in AFK_USERS:
         del AFK_USERS[message.author.id]
         await persist_runtime_state()
         welcome_template = random.choice(AFK_WELCOME_MESSAGES)
@@ -1618,8 +1621,8 @@ async def on_message(message: discord.Message):
                 delete_after=4,
             )
 
-    # 4. Chat XP Gain & Super Drop Trigger
-    if message.guild and not message.content.startswith(bot.command_prefix):
+    # 4. Chat XP Gain & Super Drop Trigger (Only runs if message is NOT a bot command)
+    if message.guild and not ctx.valid:
         now_ts = discord.utils.utcnow().timestamp()
         last_xp = USER_CHAT_XP_COOLDOWN.get(message.author.id, 0.0)
         if now_ts - last_xp >= 60.0:
@@ -2069,7 +2072,6 @@ async def announce(ctx: commands.Context, *, raw_content: Optional[str] = None):
 
     content = raw_content.strip()
 
-    # Channel override check
     target_channel = None
     if ctx.message.channel_mentions:
         first_mention = ctx.message.channel_mentions[0]
@@ -2077,7 +2079,6 @@ async def announce(ctx: commands.Context, *, raw_content: Optional[str] = None):
             target_channel = first_mention
             content = content[len(first_mention.mention):].strip()
 
-    # Fallback to official announcement channel or current channel
     if not target_channel:
         target_channel = (
             discord.utils.get(ctx.guild.text_channels, name="📢・announcements")
@@ -2175,8 +2176,10 @@ async def purge(ctx: commands.Context, amount: int = 10, target: Optional[Union[
         await asyncio.sleep(0.5)
 
     if deleted_total < amount:
-        remaining = amount - deleted_total
-        async for old_msg in ctx.channel.history(limit=remaining, before=cutoff):
+        fetch_limit = min((amount - deleted_total) * 4, 300)
+        async for old_msg in ctx.channel.history(limit=fetch_limit, before=cutoff):
+            if deleted_total >= amount:
+                break
             if purge_check(old_msg):
                 try:
                     await old_msg.delete()
@@ -2217,7 +2220,6 @@ async def backup_all(ctx: commands.Context):
     await status_msg.delete()
     await ctx.send(embed=embed, file=file)
 
-    # Keep error channel synced & prune old
     err_channel = discord.utils.get(ctx.guild.text_channels, name="🩸・bot-errors")
     if err_channel:
         file_stream.seek(0)
@@ -2234,7 +2236,6 @@ async def restore_all(ctx: commands.Context):
     backup_data = None
     source_description = ""
 
-    # Path A: File attached directly to command
     if ctx.message.attachments:
         attachment = ctx.message.attachments[0]
         if attachment.filename.endswith(".json"):
@@ -2245,7 +2246,6 @@ async def restore_all(ctx: commands.Context):
             except Exception as e:
                 return await status_msg.edit(content=f"⚠️ Failed to parse attached JSON: `{e}`")
 
-    # Path B: Auto-scan history of 🩸・bot-errors
     if not backup_data:
         err_channel = discord.utils.get(ctx.guild.text_channels, name="🩸・bot-errors")
         if err_channel:
@@ -2264,7 +2264,6 @@ async def restore_all(ctx: commands.Context):
                 if backup_data:
                     break
 
-    # Fallback Path C: Check local auto-boot file
     if not backup_data:
         local_path = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
         backup_data = await safe_read_json(local_path, None)
@@ -2278,7 +2277,6 @@ async def restore_all(ctx: commands.Context):
 
     await status_msg.edit(content=f"🔄 **Restoring non-destructively from {source_description}...**")
 
-    # Save to disk as latest snapshot and apply restore
     local_path = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
     await safe_write_json(local_path, backup_data)
     stats = await apply_unified_restore(ctx.guild, backup_data)
@@ -2631,8 +2629,8 @@ async def setup_roles_panel(ctx: commands.Context):
     await ctx.send("✅ Color & Ping panel deployed to `🎨・colours`!")
 
 @bot.command(name="afk")
-async def afk(ctx: commands.Context, *, reason: str = None):
-    selected_status = reason if reason else random.choice(AFK_PRESET_MESSAGES)
+async def afk(ctx: commands.Context, *, reason: Optional[str] = None):
+    selected_status = reason.strip() if reason else random.choice(AFK_PRESET_MESSAGES)
     AFK_USERS[ctx.author.id] = {
         "reason": selected_status,
         "time": discord.utils.utcnow(),
