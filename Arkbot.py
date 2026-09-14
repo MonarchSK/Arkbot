@@ -6,6 +6,7 @@ import os
 import random
 import re
 import sys
+import traceback
 from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -45,10 +46,10 @@ REVIVE_COOLDOWN_SECONDS = 2700  # 45 Minutes Guild Cooldown
 XP_CACHE: Dict[str, int] = {}
 XP_CACHE_DIRTY = False
 
-# Super Drop tracking
+# Super Drop tracking (4 Hours Cooldown)
 CHANNEL_CHAT_ACTIVITY: Dict[int, deque] = defaultdict(lambda: deque(maxlen=50))
 SUPER_DROP_COOLDOWNS: Dict[int, float] = {}
-SUPER_DROP_COOLDOWN_SECONDS = 3600  # 1 hour cooldown per channel
+SUPER_DROP_COOLDOWN_SECONDS = 14400  # 4 Hours (4 * 3600 seconds)
 
 # Message rate tracking
 USER_MESSAGE_TIMESTAMPS: Dict[int, deque] = defaultdict(lambda: deque(maxlen=10))
@@ -57,6 +58,15 @@ INVITE_REGEX = re.compile(
     r"(?:https?://)?(?:www\.)?(?:discord\.(?:gg|io|me|li)|discord(?:app)?\.com/invite)/[a-zA-Z0-9_-]+",
     re.IGNORECASE,
 )
+
+# System and Internal Channel Names Filter
+SYSTEM_CHANNELS = {
+    "bot-memory",
+    "📜・audit-logs",
+    "audit-logs",
+    "🩸・bot-errors",
+    "bot-errors",
+}
 
 # Level Role Tier Hierarchy (Minimum Level, Role Name)
 LEVEL_TIERS: List[Tuple[int, str]] = [
@@ -516,7 +526,7 @@ async def get_or_create_audit_channel(guild: discord.Guild) -> discord.TextChann
         name=target_name,
         category=admin_cat,
         overwrites=overwrites,
-        reason="Private Edit/Delete Audit Channel",
+        reason="Private Audit Channel (Edits, Deletions, Leaves, Verifications)",
     )
 
 async def get_or_create_memory_channel(guild: discord.Guild) -> discord.TextChannel:
@@ -991,7 +1001,8 @@ class VerificationModal(Modal, title="Server Verification Form"):
             except discord.Forbidden:
                 pass
 
-        log_channel = discord.utils.get(guild.text_channels, name="💼・bot-commands")
+        # Exclusively routed to 📜・audit-logs (Keeps 💼・bot-commands strictly for commands)
+        log_channel = await get_or_create_audit_channel(guild)
         if log_channel:
             embed = discord.Embed(title="New Member Verified", color=discord.Color.green(), timestamp=discord.utils.utcnow())
             embed.add_field(name="User", value=interaction.user.mention, inline=False)
@@ -1209,7 +1220,7 @@ class ReactionRoleView(View):
         await self.toggle_role(interaction, "Roblox Members")
 
 # ==============================================================================
-# TEAM RULES PANEL DEPLOYER
+# TEAM RULES & MASTER BOT COMMANDS DIRECTORY DEPLOYERS
 # ==============================================================================
 async def deploy_team_rules_panel(guild: discord.Guild, prefix: str = "."):
     team_rules_ch = discord.utils.get(guild.text_channels, name="🛡️・team-rules") or discord.utils.get(
@@ -1326,6 +1337,167 @@ async def deploy_team_rules_panel(guild: discord.Guild, prefix: str = "."):
     except (discord.HTTPException, discord.Forbidden) as e:
         print(f"[Team Rules Deploy] Could not post in #{team_rules_ch.name}: {e}")
 
+async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
+    cmd_channel = discord.utils.get(guild.text_channels, name="💼・bot-commands") or discord.utils.get(
+        guild.text_channels, name="bot-commands"
+    )
+
+    if not cmd_channel:
+        return
+
+    try:
+        async for msg in cmd_channel.history(limit=50):
+            if msg.author == guild.me:
+                await msg.delete()
+                await asyncio.sleep(0.3)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+    header_embed = discord.Embed(
+        title="🤖 CHILL-VERSE BOT MASTER COMMAND DIRECTORY",
+        description=(
+            "Welcome to the official bot command directory. Below is the complete "
+            "reference manual for all member, moderation, and administrative commands."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    if guild.icon:
+        header_embed.set_thumbnail(url=guild.icon.url)
+    header_embed.add_field(
+        name="📌 Active Prefix",
+        value=f"`{prefix}` *(Example: `{prefix}ping`)*",
+        inline=False,
+    )
+
+    public_embed = discord.Embed(
+        title="👥 1. General & Member Commands",
+        description="Commands accessible to all verified members in public rooms:",
+        color=discord.Color.green(),
+    )
+    public_embed.add_field(
+        name=f"`{prefix}ping`",
+        value="Checks the gateway heartbeat latency in milliseconds.",
+        inline=False,
+    )
+    public_embed.add_field(
+        name=f"`{prefix}bump`",
+        value="Bumps Chill-Verse in `⏰・bump` for **+250 XP** *(2-hour cooldown with 15m and ready alerts)*.",
+        inline=False,
+    )
+    public_embed.add_field(
+        name=f"`{prefix}revive` / `{prefix}chatrevive [topic]`",
+        value="Pings **@Chat Revive** with an icebreaker prompt *(45-min cooldown)*.",
+        inline=False,
+    )
+    public_embed.add_field(
+        name=f"`{prefix}xp` / `{prefix}rank` / `{prefix}level [@user]`",
+        value="Inspects level, rank tier, XP progress, and points required for next level.",
+        inline=False,
+    )
+    public_embed.add_field(
+        name=f"`{prefix}afk [reason]`",
+        value="Sets an AFK status. Notifies anyone mentioning you and welcomes you back on return.",
+        inline=False,
+    )
+
+    staff_embed = discord.Embed(
+        title="🛡️ 2. Moderation & Channel Isolation Controls",
+        description="Restricted to **Authority**, **Highness**, and **Supreme Leader**:",
+        color=discord.Color.gold(),
+    )
+    staff_embed.add_field(
+        name=f"`{prefix}purge <1-1000> [target]`",
+        value="Purges messages with optional user/bot/link filters. High Command only.",
+        inline=False,
+    )
+    staff_embed.add_field(
+        name=f"`{prefix}lock` / `{prefix}unlock`",
+        value="Closes or opens message sending permissions for standard members.",
+        inline=False,
+    )
+    staff_embed.add_field(
+        name=f"`{prefix}hide` / `{prefix}show`",
+        value="Toggles `@everyone` visibility for the current room.",
+        inline=False,
+    )
+    staff_embed.add_field(
+        name=f"`{prefix}permit <@user/@role>` / `{prefix}revoke <@user/@role>`",
+        value="Whitelists or removes individual channel permission overrides.",
+        inline=False,
+    )
+    staff_embed.add_field(
+        name=f"`{prefix}remove_bot_role <@role/@bot/all>`",
+        value="Isolates the channel from specific external bots or all third-party bots.",
+        inline=False,
+    )
+    staff_embed.add_field(
+        name=f"`{prefix}addxp <@user> <amount>` / `{prefix}removexp <@user> <amount>`",
+        value="Manually grants or deducts XP, auto-synchronizing rank tier roles.",
+        inline=False,
+    )
+    staff_embed.add_field(
+        name=f"`{prefix}announce [#channel] <title> | <message> [--everyone/--here]`",
+        value="Dispatches formatted official announcement embeds.",
+        inline=False,
+    )
+
+    admin_embed = discord.Embed(
+        title="⚙️ 3. Administrative, Backups & Blueprint Controls",
+        description="System architecture and disaster recovery suite *(Administrator Only)*:",
+        color=discord.Color.red(),
+    )
+    admin_embed.add_field(
+        name=f"`{prefix}setup_channels`",
+        value="Non-destructively provisions any missing channels and categories from the blueprint.",
+        inline=False,
+    )
+    admin_embed.add_field(
+        name=f"`{prefix}setup_roles`",
+        value="Generates missing tier, ping, and reaction roles without overwriting existing ones.",
+        inline=False,
+    )
+    admin_embed.add_field(
+        name=f"`{prefix}setup_tickets`",
+        value="Deploys persistent ticket and staff application buttons into `🎫・tickets`.",
+        inline=False,
+    )
+    admin_embed.add_field(
+        name=f"`{prefix}setup_roles_panel`",
+        value="Deploys persistent reaction color and notification buttons into `🎨・colours`.",
+        inline=False,
+    )
+    admin_embed.add_field(
+        name=f"`{prefix}refresh_rules` / `{prefix}refresh_commands`",
+        value="Refreshes the guidelines panel in `🛡️・team-rules` or the command manual in `💼・bot-commands`.",
+        inline=False,
+    )
+    admin_embed.add_field(
+        name=f"`{prefix}backup_all` / `{prefix}restore_all`",
+        value="Archives all structures and XP to `🩸・bot-errors` or performs safe restoration.",
+        inline=False,
+    )
+    admin_embed.add_field(
+        name=f"`{prefix}maintenance [on/off/status]`",
+        value="Toggles maintenance lockdown mode for non-administrative commands.",
+        inline=False,
+    )
+    admin_embed.add_field(
+        name=f"`{prefix}shutdown [reason]`",
+        value="Flushes all states to disk, archives snapshot to `🩸・bot-errors`, and terminates.",
+        inline=False,
+    )
+
+    admin_embed.set_footer(text="Chill-Verse Master Directory • Updated Automatically")
+
+    try:
+        await cmd_channel.send(embed=header_embed)
+        await cmd_channel.send(embed=public_embed)
+        await cmd_channel.send(embed=staff_embed)
+        await cmd_channel.send(embed=admin_embed)
+    except (discord.HTTPException, discord.Forbidden) as e:
+        print(f"[Bot Commands Deploy] Could not post in #{cmd_channel.name}: {e}")
+
 # ==============================================================================
 # SUBCLASSED BOT ENGINE
 # ==============================================================================
@@ -1417,6 +1589,7 @@ async def on_ready():
 
     for guild in bot.guilds:
         await deploy_team_rules_panel(guild, bot.command_prefix)
+        await deploy_bot_commands_panel(guild, bot.command_prefix)
         await get_or_create_audit_channel(guild)
 
         err_channel = discord.utils.get(guild.text_channels, name="🩸・bot-errors")
@@ -1533,8 +1706,36 @@ async def on_command_error(ctx: commands.Context, error: Exception):
     if isinstance(error, commands.BadArgument):
         return await ctx.send(f"⚠️ **Invalid argument:** {error}", delete_after=6)
 
-    print(f"DEBUG: Command [{ctx.command}] failed -> {type(error).__name__}: {error}")
-    await ctx.send(f"⚠️ **Command Error:** `{error}`", delete_after=8)
+    orig_error = getattr(error, "original", error)
+    tb_text = "".join(traceback.format_exception(type(orig_error), orig_error, orig_error.__traceback__))
+    if len(tb_text) > 1000:
+        tb_text = tb_text[-1000:]
+
+    print(f"DEBUG: Command [{ctx.command}] failed -> {type(orig_error).__name__}: {orig_error}")
+    await ctx.send(f"⚠️ **Command Error:** `{orig_error}`", delete_after=8)
+
+    # Exclusively route runtime exceptions to 🩸・bot-errors
+    if ctx.guild:
+        err_channel = discord.utils.get(ctx.guild.text_channels, name="🩸・bot-errors") or discord.utils.get(
+            ctx.guild.text_channels, name="bot-errors"
+        )
+        if err_channel:
+            err_embed = discord.Embed(
+                title="🚨 Command Runtime Error",
+                description="An unhandled exception occurred during command execution.",
+                color=discord.Color.dark_red(),
+                timestamp=discord.utils.utcnow(),
+            )
+            err_embed.add_field(name="Command", value=f"`{ctx.command}`" if ctx.command else "`Unknown`", inline=True)
+            err_embed.add_field(name="Invoker", value=f"{ctx.author} (`{ctx.author.id}`)", inline=True)
+            err_embed.add_field(name="Channel", value=ctx.channel.mention, inline=True)
+            err_embed.add_field(name="Exception", value=f"```py\n{type(orig_error).__name__}: {orig_error}\n```", inline=False)
+            err_embed.add_field(name="Traceback", value=f"```py\n{tb_text}\n```", inline=False)
+
+            try:
+                await err_channel.send(embed=err_embed)
+            except discord.HTTPException:
+                pass
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -1573,7 +1774,7 @@ async def on_message(message: discord.Message):
 
     ctx = await bot.get_context(message)
 
-    # 1. AFK Return Greeting (Bypassed if triggering the .afk command itself)
+    # 1. AFK Return Greeting (Bypassed if author is running the .afk command)
     if message.author.id in AFK_USERS and ctx.command and ctx.command.name == "afk":
         pass
     elif message.author.id in AFK_USERS:
@@ -1621,7 +1822,7 @@ async def on_message(message: discord.Message):
                 delete_after=4,
             )
 
-    # 4. Chat XP Gain & Super Drop Trigger (Only runs if message is NOT a bot command)
+    # 4. Chat XP Gain & Super Drop Trigger (Available in EVERY text channel, 4 hours timer)
     if message.guild and not ctx.valid:
         now_ts = discord.utils.utcnow().timestamp()
         last_xp = USER_CHAT_XP_COOLDOWN.get(message.author.id, 0.0)
@@ -1631,11 +1832,8 @@ async def on_message(message: discord.Message):
             prev_xp, new_xp = await add_user_xp(message.author.id, gained)
             await handle_level_up(message.author, prev_xp, new_xp, message.channel)
 
-        cat_name = message.channel.category.name if message.channel.category else ""
-        valid_channel_names = {"☁️・chat", "🪄・chat-en", "general", "chat"}
-        valid_categories = {"Chill Area <3"}
-
-        if message.channel.name in valid_channel_names or cat_name in valid_categories:
+        # Super Drop is available across ALL server channels (excluding private system channels)
+        if isinstance(message.channel, discord.TextChannel) and message.channel.name not in SYSTEM_CHANNELS:
             activity_queue = CHANNEL_CHAT_ACTIVITY[message.channel.id]
             activity_queue.append((message.author.id, now_ts))
 
@@ -1659,7 +1857,7 @@ async def on_message(message: discord.Message):
                         color=discord.Color.from_rgb(255, 69, 0),
                         timestamp=discord.utils.utcnow(),
                     )
-                    super_embed.set_footer(text="Triggered by High Server Activity • Chill-Verse")
+                    super_embed.set_footer(text="Triggered by High Server Activity (4h Interval) • Chill-Verse")
 
                     view = SuperXPDropView(xp_amount=super_xp)
                     try:
@@ -1672,30 +1870,32 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 # ==============================================================================
-# AUTOMATED TASKS: BACKUPS, BIRTHDAYS, XP FLUSH & HOURLY DROPS
+# AUTOMATED TASKS: BACKUPS, BIRTHDAYS, XP FLUSH & REGULAR DROPS (2 HOURS)
 # ==============================================================================
 @tasks.loop(seconds=60.0)
 async def xp_flush_task():
     await flush_xp_cache()
 
-@tasks.loop(hours=1.0)
+@tasks.loop(hours=2.0)  # Configured for 2-hour loop in every server text channel
 async def xp_drop_task():
     await bot.wait_until_ready()
     if MAINTENANCE_MODE:
         return
 
-    valid_channel_names = {"☁️・chat", "🪄・chat-en", "general", "chat"}
-    valid_categories = {"Chill Area <3"}
-
     for guild in bot.guilds:
         eligible_channels: List[discord.TextChannel] = []
 
         for ch in guild.text_channels:
-            cat_name = ch.category.name if ch.category else ""
-            if ch.name in valid_channel_names or cat_name in valid_categories:
-                perms = ch.permissions_for(guild.me)
-                if perms.view_channel and perms.send_messages and perms.embed_links:
-                    eligible_channels.append(ch)
+            if ch.name in SYSTEM_CHANNELS:
+                continue
+
+            member_perms = ch.permissions_for(guild.default_role)
+            if not member_perms.view_channel:
+                continue
+
+            bot_perms = ch.permissions_for(guild.me)
+            if bot_perms.view_channel and bot_perms.send_messages and bot_perms.embed_links:
+                eligible_channels.append(ch)
 
         if not eligible_channels:
             continue
@@ -1712,7 +1912,7 @@ async def xp_drop_task():
             color=discord.Color.gold(),
             timestamp=discord.utils.utcnow(),
         )
-        embed.set_footer(text="Hourly Community Drop • Chill-Verse")
+        embed.set_footer(text="Community Drop (Every 2 Hours) • Chill-Verse")
 
         view = ClaimXPDropView(xp_amount=drop_xp)
         try:
@@ -2653,6 +2853,15 @@ async def refresh_rules(ctx: commands.Context):
     await deploy_team_rules_panel(ctx.guild, bot.command_prefix)
     await ctx.send(
         "✅ **Team rules and command manual updated successfully in `🛡️・team-rules`!**",
+        delete_after=5,
+    )
+
+@bot.command(name="refresh_commands", aliases=["refresh_bot_commands"])
+@commands.has_permissions(administrator=True)
+async def refresh_commands(ctx: commands.Context):
+    await deploy_bot_commands_panel(ctx.guild, bot.command_prefix)
+    await ctx.send(
+        "✅ **Master bot command manual refreshed in `💼・bot-commands`!**",
         delete_after=5,
     )
 
