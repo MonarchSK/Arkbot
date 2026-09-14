@@ -37,7 +37,11 @@ BUMP_TIMER_TASK: Optional[asyncio.Task] = None
 BUMP_COOLDOWN_SECONDS = 7200  # 2 Hours
 ANNOUNCED_BIRTHDAYS_TODAY: List[int] = []
 
-# XP In-Memory Cache (Prevents continuous disk I/O)
+# Chat Revive State & Cooldowns
+LAST_REVIVE_TIME: Dict[int, float] = {}
+REVIVE_COOLDOWN_SECONDS = 2700  # 45 Minutes Guild Cooldown
+
+# XP In-Memory Cache (Avoids Disk I/O Bottlenecks)
 XP_CACHE: Dict[str, int] = {}
 XP_CACHE_DIRTY = False
 
@@ -123,6 +127,19 @@ BUMP_READY_MESSAGES = [
     "🎈 **BUMP UNLOCKED!** Don't let the server wait—boost us up and take home your XP!",
     "✨ **FRESH CYCLE STARTED!** The clock hit zero! Step up and drop a `.bump` in the chat!",
     "💫 **BOOST WINDOW LIVE!** Let's make Chill-Verse shine across Discord again. Hit `.bump` now!",
+]
+
+REVIVE_ICEBREAKERS = [
+    "If you could have any superpower for 24 hours, what would it be and why?",
+    "What's your current favorite video game or series that you can't put down?",
+    "If you could travel to any country tomorrow with everything paid for, where are you going?",
+    "What is the single best food to eat while binge-watching shows?",
+    "If you had to listen to only one music artist for an entire month, who is it?",
+    "What's an unpopular opinion you have that will make everyone in chat debate?",
+    "Coffee, Chai, Energy Drinks, or Cold Water? What fuels your day?",
+    "What was the most fun thing that happened to you this week?",
+    "If you could instantly master any language or musical instrument, which would you pick?",
+    "What is your all-time favorite movie that you can rewatch without getting bored?",
 ]
 
 SERVER_BLUEPRINT: List[Dict[str, Any]] = [
@@ -226,7 +243,7 @@ SERVER_BLUEPRINT: List[Dict[str, Any]] = [
 ]
 
 # ==============================================================================
-# ASYNC THREAD-SAFE STORAGE ENGINE
+# ASYNC THREAD-SAFE STORAGE & CACHING ENGINE
 # ==============================================================================
 FILE_LOCKS: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
@@ -420,13 +437,28 @@ def is_authority_holder():
     async def predicate(ctx: commands.Context):
         if not ctx.guild:
             return False
-        if getattr(ctx.author.guild_permissions, "administrator", False):
+        # Server Owner and Administrators always bypass
+        if ctx.author.id == ctx.guild.owner_id or getattr(ctx.author.guild_permissions, "administrator", False):
             return True
         authority_roles = {"supreme leader", "highness", "authority"}
         user_roles = {r.name.lower().strip() for r in getattr(ctx.author, "roles", [])}
         if bool(authority_roles.intersection(user_roles)):
             return True
         raise commands.CheckFailure("⛔ **Restricted:** Only Administrators and Authority holders can execute this command.")
+
+    return commands.check(predicate)
+
+def is_purge_authorized():
+    async def predicate(ctx: commands.Context):
+        if not ctx.guild:
+            return False
+        if ctx.author.id == ctx.guild.owner_id or getattr(ctx.author.guild_permissions, "administrator", False):
+            return True
+        purge_roles = {"supreme leader", "highness", "authority"}
+        user_roles = {r.name.lower().strip() for r in getattr(ctx.author, "roles", [])}
+        if bool(purge_roles.intersection(user_roles)):
+            return True
+        raise commands.CheckFailure("⛔ **Restricted:** The purge command is strictly reserved for **Supreme Leader**, **Highness**, and **Authority**.")
 
     return commands.check(predicate)
 
@@ -514,13 +546,14 @@ async def get_or_create_memory_channel(guild: discord.Guild) -> discord.TextChan
         reason="Arkbot State Engine",
     )
 
-async def prune_old_backups(channel: discord.TextChannel, keep_count: int = 3):
+async def purge_all_old_backups(channel: discord.TextChannel, keep_count: int = 1):
+    """Deletes old bot backup messages from channel history, preserving only newest."""
     try:
         backup_messages = []
         async for msg in channel.history(limit=100):
             if msg.author == channel.guild.me:
                 has_backup_file = any(att.filename.endswith(".json") for att in msg.attachments)
-                has_backup_text = "backup" in msg.content.lower()
+                has_backup_text = "backup" in msg.content.lower() or "snapshot" in msg.content.lower()
                 if has_backup_file or has_backup_text:
                     backup_messages.append(msg)
 
@@ -532,7 +565,7 @@ async def prune_old_backups(channel: discord.TextChannel, keep_count: int = 3):
                 except (discord.NotFound, discord.HTTPException):
                     pass
     except Exception as e:
-        print(f"Failed pruning backups: {e}")
+        print(f"Failed purging old backups: {e}")
 
 # ==============================================================================
 # UNIFIED BACKUP & SAFE RESTORATION
@@ -1249,7 +1282,7 @@ async def deploy_team_rules_panel(guild: discord.Guild, prefix: str = "."):
     commands_embed.add_field(
         name="🧹 Moderation & Purge Suite",
         value=(
-            f"`{prefix}purge <1-1000> [target]` — Authority bulk deletion (supports `@user`, `bots`, or `links`).\n"
+            f"`{prefix}purge <1-1000> [target]` — Authority bulk deletion (Supreme Leader, Highness & Authority only).\n"
             f"`{prefix}remove_bot_role <@role/@bot/all>` — Immediately cuts bot permissions from a channel."
         ),
         inline=False,
@@ -1276,9 +1309,10 @@ async def deploy_team_rules_panel(guild: discord.Guild, prefix: str = "."):
     )
 
     commands_embed.add_field(
-        name="📢 High Command Broadcasts & System Maintenance",
+        name="📢 Broadcasts, Revive & Backups",
         value=(
-            f"`{prefix}announce <title> | <text> [--everyone/--here]` — Posts official embeds to `#announcements`.\n"
+            f"`{prefix}announce [optional #channel] <title> | <text> [--everyone/--here]` — Posts official embeds.\n"
+            f"`{prefix}revive [optional topic]` — Pings the Chat Revive role with an icebreaker prompt.\n"
             f"`{prefix}maintenance [on/off/status]` — Toggles maintenance lockdown mode.\n"
             f"`{prefix}shutdown [reason]` — Gracefully flushes and terminates the bot with full backups.\n"
             f"`{prefix}backup_all` / `{prefix}restore_all` — Creates or restores complete architecture."
@@ -1299,7 +1333,11 @@ async def deploy_team_rules_panel(guild: discord.Guild, prefix: str = "."):
 # ==============================================================================
 class ArkBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix=".", intents=intents)
+        super().__init__(
+            command_prefix=".",
+            intents=intents,
+            strip_after_prefix=True,  # Enables commands typed as '.command' or '. command'
+        )
         self.remove_command("help")
 
     async def setup_hook(self):
@@ -1335,7 +1373,7 @@ class ArkBot(commands.Bot):
                     f"[Auto-Boot] Restored {stats['channels_created']} missing channels in {guild.name}."
                 )
 
-        # Resume bump timer if interrupted
+        # Resume bump timer if interrupted during restart
         if LAST_BUMP_TIME:
             elapsed = (datetime.datetime.now(datetime.timezone.utc) - LAST_BUMP_TIME).total_seconds()
             if elapsed < BUMP_COOLDOWN_SECONDS and self.guilds:
@@ -1356,12 +1394,13 @@ async def check_maintenance_mode(ctx: commands.Context):
     if ctx.command and ctx.command.name in ["maintenance", "shutdown"]:
         return True
 
+    is_owner = ctx.guild and ctx.author.id == ctx.guild.owner_id
     is_admin = getattr(getattr(ctx.author, "guild_permissions", None), "administrator", False)
     staff_roles = {"supreme leader", "highness", "authority"}
     user_roles = {r.name.lower().strip() for r in getattr(ctx.author, "roles", [])}
     is_high_command = bool(staff_roles.intersection(user_roles))
 
-    if is_admin or is_high_command:
+    if is_owner or is_admin or is_high_command:
         return True
 
     await ctx.send("🛠️ **Maintenance Mode Active:** Non-administrative commands are temporarily disabled.", delete_after=6)
@@ -1379,13 +1418,30 @@ async def on_ready():
         await deploy_team_rules_panel(guild, bot.command_prefix)
         await get_or_create_audit_channel(guild)
 
+        # Reboot snapshot: generates fresh backup and purges all previous ones in error channel
+        err_channel = discord.utils.get(guild.text_channels, name="🩸・bot-errors")
+        if err_channel:
+            payload = await generate_unified_backup_payload(guild)
+            backup_file_path = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=guild.id)
+            await safe_write_json(backup_file_path, payload)
+
+            file_stream = io.BytesIO(json.dumps(payload, indent=4).encode("utf-8"))
+            backup_file = discord.File(file_stream, filename=f"startup_backup_{guild.id}.json")
+
+            await err_channel.send(
+                content="🔒 **Automated Fresh Reboot Snapshot (Previous backups purged)**",
+                file=backup_file,
+            )
+            # Purge all older backups so only the newest remains
+            await purge_all_old_backups(err_channel, keep_count=1)
+
     if not UPDATE_NOTIFIED:
         for guild in bot.guilds:
             team_news_ch = discord.utils.get(guild.text_channels, name="team-news")
             if team_news_ch:
                 embed = discord.Embed(
                     title="🚀 Arkbot Operational — Full Engine Online!",
-                    description="Leveling, persistence locks, hourly XP drops, super drops, and staff manuals are online.",
+                    description="Leveling, auto-backups, bump trackers, chat revive, and moderation engines are online.",
                     color=discord.Color.green(),
                     timestamp=discord.utils.utcnow(),
                 )
@@ -1680,7 +1736,7 @@ async def hourly_backup_task():
                 content="🔒 **Automated Hourly Snapshot (Channels, Perms, Blueprint, XP)**",
                 file=file,
             )
-            await prune_old_backups(backup_channel, keep_count=3)
+            await purge_all_old_backups(backup_channel, keep_count=1)
         except Exception:
             pass
 
@@ -1801,6 +1857,53 @@ async def bump(ctx: commands.Context):
 
     target_channel = bump_channel or ctx.channel
     BUMP_TIMER_TASK = asyncio.create_task(schedule_bump_timers(ctx.guild, target_channel))
+
+@bot.command(name="revive", aliases=["chatrevive"])
+@commands.guild_only()
+async def chat_revive(ctx: commands.Context, *, topic: Optional[str] = None):
+    guild_id = ctx.guild.id
+    now = discord.utils.utcnow().timestamp()
+    last_revive = LAST_REVIVE_TIME.get(guild_id, 0.0)
+
+    if now - last_revive < REVIVE_COOLDOWN_SECONDS:
+        remaining = int(REVIVE_COOLDOWN_SECONDS - (now - last_revive))
+        mins = remaining // 60
+        secs = remaining % 60
+        return await ctx.send(
+            f"⏳ **Chat Revive Cooldown:** You can ping the chat again in **{mins}m {secs}s**!",
+            delete_after=6,
+        )
+
+    revive_role = discord.utils.get(ctx.guild.roles, name="Chat Revive")
+    mention_target = revive_role.mention if revive_role else "@here"
+
+    chosen_topic = topic.strip() if topic else random.choice(REVIVE_ICEBREAKERS)
+    LAST_REVIVE_TIME[guild_id] = now
+
+    embed = discord.Embed(
+        title="⚡ CHAT REVIVE SUMMONS! ⚡",
+        description=(
+            f"**{ctx.author.mention} wants to wake up the chat!**\n\n"
+            f"🗣️ **Topic / Question:**\n> *\"{chosen_topic}\"*\n\n"
+            f"Come join the conversation and earn some active XP!"
+        ),
+        color=discord.Color.from_rgb(26, 188, 156),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.set_footer(text=f"Initiated by {ctx.author.display_name} • Chill-Verse")
+    if ctx.author.display_avatar:
+        embed.set_thumbnail(url=ctx.author.display_avatar.url)
+
+    await ctx.send(
+        content=mention_target,
+        embed=embed,
+        allowed_mentions=discord.AllowedMentions(roles=True, everyone=True),
+    )
+
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        pass
 
 @bot.command(name="xp", aliases=["rank", "level"])
 async def check_xp(ctx: commands.Context, member: Optional[discord.Member] = None):
@@ -1956,7 +2059,33 @@ async def remove_bot_role(ctx: commands.Context, target: Union[discord.Role, dis
 
 @bot.command(name="announce")
 @is_authority_holder()
-async def announce(ctx: commands.Context, *, content: str):
+async def announce(ctx: commands.Context, *, raw_content: Optional[str] = None):
+    if not raw_content or not raw_content.strip():
+        return await ctx.send(
+            "⚠️ **Usage:** `.announce [optional #channel] <Title> | <Message> [--everyone/--here]`\n"
+            "**Example:** `.announce 📢 Updates | The new Chat Revive role is now live! --everyone`",
+            delete_after=10,
+        )
+
+    content = raw_content.strip()
+
+    # Channel override check
+    target_channel = None
+    if ctx.message.channel_mentions:
+        first_mention = ctx.message.channel_mentions[0]
+        if content.startswith(first_mention.mention):
+            target_channel = first_mention
+            content = content[len(first_mention.mention):].strip()
+
+    # Fallback to official announcement channel or current channel
+    if not target_channel:
+        target_channel = (
+            discord.utils.get(ctx.guild.text_channels, name="📢・announcements")
+            or discord.utils.get(ctx.guild.text_channels, name="announcements")
+            or next((ch for ch in ctx.guild.text_channels if "announcement" in ch.name.lower()), None)
+            or ctx.channel
+        )
+
     mention_str = None
     if "--everyone" in content:
         mention_str = "@everyone"
@@ -1966,11 +2095,23 @@ async def announce(ctx: commands.Context, *, content: str):
         content = content.replace("--here", "").strip()
 
     if "|" in content:
-        title, body = [part.strip() for part in content.split("|", 1)]
+        parts = content.split("|", 1)
+        title = parts[0].strip() or "Community Announcement"
+        body = parts[1].strip()
     else:
-        title, body = "Community Announcement", content.strip()
+        title = "Community Announcement"
+        body = content.strip()
 
-    target_channel = discord.utils.get(ctx.guild.text_channels, name="📢・announcements") or ctx.channel
+    if not body:
+        body = "*No message body provided.*"
+
+    bot_perms = target_channel.permissions_for(ctx.guild.me)
+    if not (bot_perms.send_messages and bot_perms.embed_links):
+        return await ctx.send(
+            f"⚠️ **Permission Error:** I lack `Send Messages` or `Embed Links` in {target_channel.mention}.",
+            delete_after=8,
+        )
+
     embed = discord.Embed(
         title=title,
         description=body,
@@ -1981,12 +2122,74 @@ async def announce(ctx: commands.Context, *, content: str):
     if ctx.guild.icon:
         embed.set_thumbnail(url=ctx.guild.icon.url)
 
-    await target_channel.send(content=mention_str, embed=embed)
-    if target_channel != ctx.channel:
-        await ctx.send(f"✅ Announcement dispatched to {target_channel.mention}.", delete_after=5)
+    try:
+        await target_channel.send(
+            content=mention_str,
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions(everyone=True, roles=True, users=True),
+        )
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.NotFound):
+            pass
+
+        if target_channel.id != ctx.channel.id:
+            await ctx.send(f"✅ Announcement dispatched to {target_channel.mention}.", delete_after=5)
+    except discord.HTTPException as e:
+        await ctx.send(f"⚠️ Failed to send announcement: `{e}`", delete_after=8)
+
+@bot.command(name="purge")
+@is_purge_authorized()
+async def purge(ctx: commands.Context, amount: int = 10, target: Optional[Union[discord.Member, str]] = None):
+    if amount < 1 or amount > 1000:
+        return await ctx.send("⚠️ Specify a message count between 1 and 1,000.", delete_after=5)
+
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        pass
+
+    def purge_check(m: discord.Message) -> bool:
+        if m.pinned:
+            return False
+        if isinstance(target, discord.Member):
+            return m.author.id == target.id
+        elif isinstance(target, str):
+            t_lower = target.lower()
+            if t_lower in ["bot", "bots"]:
+                return m.author.bot
+            if t_lower in ["link", "links"]:
+                return bool(INVITE_REGEX.search(m.content) or "http://" in m.content.lower() or "https://" in m.content.lower())
+        return True
+
+    deleted_total = 0
+    cutoff = discord.utils.utcnow() - datetime.timedelta(days=14)
+
+    while deleted_total < amount:
+        batch_limit = min(amount - deleted_total, 100)
+        deleted_batch = await ctx.channel.purge(limit=batch_limit, check=purge_check, after=cutoff)
+        count = len(deleted_batch)
+        deleted_total += count
+        if count < batch_limit:
+            break
+        await asyncio.sleep(0.5)
+
+    if deleted_total < amount:
+        remaining = amount - deleted_total
+        async for old_msg in ctx.channel.history(limit=remaining, before=cutoff):
+            if purge_check(old_msg):
+                try:
+                    await old_msg.delete()
+                    deleted_total += 1
+                    await asyncio.sleep(0.3)
+                except (discord.NotFound, discord.HTTPException):
+                    pass
+
+    target_desc = f"from {target.mention}" if isinstance(target, discord.Member) else (f"matching `{target}`" if target else "")
+    await ctx.send(f"🧹 Cleared **{deleted_total}** message(s) {target_desc}.", delete_after=4)
 
 # ==============================================================================
-# SYSTEM MANAGEMENT & BACKUPS
+# SYSTEM MANAGEMENT & DYNAMIC RESTORE
 # ==============================================================================
 @bot.command(name="backup_all")
 @commands.has_permissions(administrator=True)
@@ -2014,42 +2217,82 @@ async def backup_all(ctx: commands.Context):
     await status_msg.delete()
     await ctx.send(embed=embed, file=file)
 
+    # Keep error channel synced & prune old
+    err_channel = discord.utils.get(ctx.guild.text_channels, name="🩸・bot-errors")
+    if err_channel:
+        file_stream.seek(0)
+        await err_channel.send(
+            content="🔒 **Manual Backup Snapshot Saved**",
+            file=discord.File(file_stream, filename=f"manual_backup_{ctx.guild.id}.json"),
+        )
+        await purge_all_old_backups(err_channel, keep_count=1)
+
 @bot.command(name="restore_all")
 @commands.has_permissions(administrator=True)
 async def restore_all(ctx: commands.Context):
-    if not ctx.message.attachments:
-        return await ctx.send(
-            "⚠️ **Please attach a backup JSON file when running `.restore_all`!**\n"
-            "*(Attach your `chillverse_full_backup.json` and type `.restore_all` in comment box)*",
-            delete_after=8,
+    status_msg = await ctx.send("🔄 **Scanning for backup source (Uploaded File or Server Channel History)...**")
+    backup_data = None
+    source_description = ""
+
+    # Path A: File attached directly to command
+    if ctx.message.attachments:
+        attachment = ctx.message.attachments[0]
+        if attachment.filename.endswith(".json"):
+            try:
+                content = await attachment.read()
+                backup_data = json.loads(content.decode("utf-8"))
+                source_description = f"Uploaded File `{attachment.filename}`"
+            except Exception as e:
+                return await status_msg.edit(content=f"⚠️ Failed to parse attached JSON: `{e}`")
+
+    # Path B: Auto-scan history of 🩸・bot-errors
+    if not backup_data:
+        err_channel = discord.utils.get(ctx.guild.text_channels, name="🩸・bot-errors")
+        if err_channel:
+            await status_msg.edit(content="🔍 **No file attached. Searching latest backup in `🩸・bot-errors`...**")
+            async for msg in err_channel.history(limit=50):
+                if msg.author == ctx.guild.me and msg.attachments:
+                    for att in msg.attachments:
+                        if att.filename.endswith(".json"):
+                            try:
+                                content = await att.read()
+                                backup_data = json.loads(content.decode("utf-8"))
+                                source_description = f"Latest Server Snapshot `{att.filename}` in {err_channel.mention}"
+                                break
+                            except Exception:
+                                continue
+                if backup_data:
+                    break
+
+    # Fallback Path C: Check local auto-boot file
+    if not backup_data:
+        local_path = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
+        backup_data = await safe_read_json(local_path, None)
+        if backup_data:
+            source_description = f"Local System File `{local_path}`"
+
+    if not backup_data:
+        return await status_msg.edit(
+            content="⚠️ **No backup found!** Either attach a `.json` backup file or ensure a backup exists in `🩸・bot-errors`."
         )
 
-    attachment = ctx.message.attachments[0]
-    if not attachment.filename.endswith(".json"):
-        return await ctx.send("⚠️ Uploaded file must be a `.json` backup file.", delete_after=5)
+    await status_msg.edit(content=f"🔄 **Restoring non-destructively from {source_description}...**")
 
-    status_msg = await ctx.send("🔄 **Processing safe non-destructive restore (Preserving existing channels & perms)...**")
-
-    try:
-        content = await attachment.read()
-        backup_data = json.loads(content.decode("utf-8"))
-    except Exception as e:
-        return await status_msg.edit(content=f"⚠️ Failed to parse backup file: `{e}`")
-
-    backup_file_path = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
-    await safe_write_json(backup_file_path, backup_data)
+    # Save to disk as latest snapshot and apply restore
+    local_path = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
+    await safe_write_json(local_path, backup_data)
     stats = await apply_unified_restore(ctx.guild, backup_data)
 
     embed = discord.Embed(
         title="✅ Full System Restored Safely",
         description=(
-            f"Restoration from `{attachment.filename}` complete:\n\n"
+            f"Restoration from **{source_description}** complete:\n\n"
             f"• **Missing Channels Rebuilt:** `{stats['channels_created']}`\n"
             f"• **Missing Permissions Applied:** `{stats['perms_applied']}`\n"
-            f"• **Existing Permissions Preserved (Skipped):** `{stats['perms_skipped']}`\n"
+            f"• **Existing Overwrites Preserved (Skipped):** `{stats['perms_skipped']}`\n"
             f"• **User XP Profiles Loaded:** `{stats['xp_users']}`\n"
             f"• **Blueprint Synced to Memory:** Active\n\n"
-            f"*Zero existing channels were modified or duplicated.*"
+            f"*Zero existing channels or configurations were modified, overwritten, or duplicated.*"
         ),
         color=discord.Color.green(),
         timestamp=discord.utils.utcnow(),
@@ -2127,7 +2370,7 @@ async def shutdown(ctx: commands.Context, *, reason: str = "Scheduled system mai
                 )
                 shutdown_embed.set_footer(text="Arkbot Architecture Shutdown Engine")
                 await err_channel.send(embed=shutdown_embed, file=backup_file)
-                await prune_old_backups(err_channel, keep_count=3)
+                await purge_all_old_backups(err_channel, keep_count=1)
         except Exception as e:
             print(f"[Maintenance Shutdown Error] Guild {guild.id}: {e}")
 
@@ -2302,6 +2545,7 @@ async def setup_roles(ctx: commands.Context):
         {"name": "Moderator", "perms": discord.Permissions(kick_members=True, moderate_members=True, manage_messages=True), "color": discord.Color.yellow(), "hoist": True},
         {"name": "Trial Mod", "perms": discord.Permissions(moderate_members=True, manage_messages=True), "color": discord.Color.blue(), "hoist": True},
         {"name": "Chill-Verse Team", "perms": discord.Permissions(view_channel=True, send_messages=True, read_message_history=True), "color": discord.Color(0x313338), "hoist": True},
+        {"name": "Chat Revive", "perms": discord.Permissions.none(), "color": discord.Color.from_rgb(26, 188, 156), "hoist": False},
         {"name": "Sovereign (Levels 60-70)", "perms": base_perms, "color": discord.Color.purple(), "hoist": True},
         {"name": "Legend (Levels 50-59)", "perms": base_perms, "color": discord.Color.dark_purple(), "hoist": False},
         {"name": "Champion (Levels 40-49)", "perms": base_perms, "color": discord.Color(0xED4245), "hoist": False},
@@ -2353,7 +2597,7 @@ async def setup_roles(ctx: commands.Context):
             print(f"Failed to create role {role_data['name']}: {e}")
 
     await status_msg.edit(
-        content=f"✅ **Role Sync Complete:** Created **{created_count}** missing role(s). Preserved **{skipped_count}** existing role(s) without modifications."
+        content=f"✅ **Role Sync Complete:** Created **{created_count}** missing role(s) (including `Chat Revive`). Preserved **{skipped_count}** existing role(s) without modifications."
     )
 
 @bot.command(name="setup_tickets")
@@ -2385,56 +2629,6 @@ async def setup_roles_panel(ctx: commands.Context):
     )
     await ch.send(embed=embed, view=ReactionRoleView())
     await ctx.send("✅ Color & Ping panel deployed to `🎨・colours`!")
-
-@bot.command(name="purge")
-@is_authority_holder()
-async def purge(ctx: commands.Context, amount: int = 10, target: Optional[Union[discord.Member, str]] = None):
-    if amount < 1 or amount > 1000:
-        return await ctx.send("⚠️ Specify a message count between 1 and 1,000.", delete_after=5)
-
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-        pass
-
-    def purge_check(m: discord.Message) -> bool:
-        if m.pinned:
-            return False
-        if isinstance(target, discord.Member):
-            return m.author.id == target.id
-        elif isinstance(target, str):
-            t_lower = target.lower()
-            if t_lower in ["bot", "bots"]:
-                return m.author.bot
-            if t_lower in ["link", "links"]:
-                return bool(INVITE_REGEX.search(m.content) or "http://" in m.content.lower() or "https://" in m.content.lower())
-        return True
-
-    deleted_total = 0
-    cutoff = discord.utils.utcnow() - datetime.timedelta(days=14)
-
-    while deleted_total < amount:
-        batch_limit = min(amount - deleted_total, 100)
-        deleted_batch = await ctx.channel.purge(limit=batch_limit, check=purge_check, after=cutoff)
-        count = len(deleted_batch)
-        deleted_total += count
-        if count < batch_limit:
-            break
-        await asyncio.sleep(0.5)
-
-    if deleted_total < amount:
-        remaining = amount - deleted_total
-        async for old_msg in ctx.channel.history(limit=remaining, before=cutoff):
-            if purge_check(old_msg):
-                try:
-                    await old_msg.delete()
-                    deleted_total += 1
-                    await asyncio.sleep(0.3)
-                except (discord.NotFound, discord.HTTPException):
-                    pass
-
-    target_desc = f"from {target.mention}" if isinstance(target, discord.Member) else (f"matching `{target}`" if target else "")
-    await ctx.send(f"🧹 Cleared **{deleted_total}** message(s) {target_desc}.", delete_after=4)
 
 @bot.command(name="afk")
 async def afk(ctx: commands.Context, *, reason: str = None):
