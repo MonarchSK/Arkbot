@@ -156,6 +156,9 @@ REVIVE_ICEBREAKERS = [
     "What is your all-time favorite movie that you can rewatch without getting bored?",
 ]
 
+# ==============================================================================
+# SERVER BLUEPRINT (UPDATED)
+# ==============================================================================
 SERVER_BLUEPRINT: List[Dict[str, Any]] = [
     {
         "category": "Welcome",
@@ -172,7 +175,6 @@ SERVER_BLUEPRINT: List[Dict[str, Any]] = [
             {"name": "🛡️・team-rules", "type": "text", "restricted": True},
             {"name": "💬・team-chat", "type": "text", "restricted": True},
             {"name": "⏰・bump", "type": "text", "restricted": False},
-            {"name": "team-news-forum", "type": "forum", "restricted": True},
         ],
     },
     {
@@ -214,11 +216,9 @@ SERVER_BLUEPRINT: List[Dict[str, Any]] = [
     {
         "category": "Hobbies <3",
         "channels": [
-            {"name": "shayari-and-poetry💗-forum", "type": "forum", "restricted": False},
             {"name": "photography📷", "type": "text", "restricted": False},
             {"name": "arts-and-crafts🎨", "type": "text", "restricted": False},
             {"name": "🎤drop-your-songs", "type": "text", "restricted": False},
-            {"name": "shayari-and-poetry💗", "type": "text", "restricted": False},
         ],
     },
     {
@@ -314,7 +314,7 @@ async def add_user_xp(user_id: int, amount: int) -> Tuple[int, int]:
     new_xp = prev_xp + amount
     XP_CACHE[uid] = new_xp
     XP_CACHE_DIRTY = True
-    await flush_xp_cache()  # Instant write so unexpected kills never wipe XP
+    await flush_xp_cache()  # Instant write so unexpected restarts never wipe XP
     return prev_xp, new_xp
 
 async def remove_user_xp(user_id: int, amount: int) -> Tuple[int, int]:
