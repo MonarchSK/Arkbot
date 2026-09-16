@@ -29,7 +29,7 @@ STATE_FILE = "bot_runtime_state.json"
 XP_DATABASE_FILE = "user_xp.json"
 BIRTHDAYS_FILE = "birthdays.json"
 CONFESSIONS_FILE = "confessions.json"
-AUTO_BOOT_BACKUP_TEMPLATE = "auto_boot_backup_{guild_id}.json"
+MASTER_BACKUP_TEMPLATE = "master_backup_{guild_id}.json"
 
 # In-memory caches & state
 AFK_USERS: Dict[int, Dict[str, Any]] = {}
@@ -42,7 +42,7 @@ ANNOUNCED_BIRTHDAYS_TODAY: List[int] = []
 LAST_REVIVE_TIME: Dict[int, float] = {}
 REVIVE_COOLDOWN_SECONDS = 2700  # 45 Minutes Guild Cooldown
 
-# XP In-Memory Cache (Avoids Disk I/O Bottlenecks)
+# XP In-Memory Cache
 XP_CACHE: Dict[str, int] = {}
 XP_CACHE_DIRTY = False
 
@@ -59,7 +59,6 @@ INVITE_REGEX = re.compile(
     re.IGNORECASE,
 )
 
-# System and Internal Channel Names Filter
 SYSTEM_CHANNELS = {
     "bot-memory",
     "📜・audit-logs",
@@ -70,7 +69,6 @@ SYSTEM_CHANNELS = {
     "bot-testing",
 }
 
-# Level Role Tier Hierarchy (Minimum Level, Role Name)
 LEVEL_TIERS: List[Tuple[int, str]] = [
     (60, "Sovereign (Levels 60-70)"),
     (50, "Legend (Levels 50-59)"),
@@ -258,7 +256,7 @@ SERVER_BLUEPRINT: List[Dict[str, Any]] = [
 ]
 
 # ==============================================================================
-# ASYNC THREAD-SAFE STORAGE & CACHING ENGINE
+# ASYNC STORAGE & CACHING ENGINE
 # ==============================================================================
 FILE_LOCKS: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
@@ -335,6 +333,16 @@ async def remove_user_xp(user_id: int, amount: int) -> Tuple[int, int]:
     return prev_xp, new_xp
 
 
+async def set_user_xp(user_id: int, amount: int) -> Tuple[int, int]:
+    global XP_CACHE_DIRTY
+    uid = str(user_id)
+    prev_xp = XP_CACHE.get(uid, 0)
+    new_xp = max(0, amount)
+    XP_CACHE[uid] = new_xp
+    XP_CACHE_DIRTY = True
+    return prev_xp, new_xp
+
+
 def calculate_level(xp: int) -> int:
     if xp <= 0:
         return 0
@@ -353,10 +361,20 @@ async def save_birthdays(data: Dict[str, str]) -> None:
     await safe_write_json(BIRTHDAYS_FILE, data)
 
 
-async def get_next_confession_id() -> int:
-    data = await safe_read_json(CONFESSIONS_FILE, {"last_id": 0})
+async def record_confession(user_id: int, content: str) -> int:
+    data = await safe_read_json(CONFESSIONS_FILE, {"last_id": 0, "entries": []})
     new_id = data.get("last_id", 0) + 1
     data["last_id"] = new_id
+    if "entries" not in data or not isinstance(data["entries"], list):
+        data["entries"] = []
+    data["entries"].append(
+        {
+            "id": new_id,
+            "user_id": user_id,
+            "content": content,
+            "timestamp": discord.utils.utcnow().isoformat(),
+        }
+    )
     await safe_write_json(CONFESSIONS_FILE, data)
     return new_id
 
@@ -534,7 +552,7 @@ def normalize_name(name: str) -> str:
 
 
 # ==============================================================================
-# STRICT ADMIN AREA PERMISSION ENFORCER (SUPREME LEADER, HIGHNESS, ARKBOT ONLY)
+# ADMIN AREA SECURITY ENFORCER
 # ==============================================================================
 async def enforce_admin_area_security(guild: discord.Guild):
     admin_cat = discord.utils.get(guild.categories, name="Admin Area 🔒")
@@ -700,31 +718,29 @@ async def find_latest_backup_from_discord(guild: discord.Guild) -> Optional[Dict
     return None
 
 
-async def purge_all_old_backups(channel: discord.TextChannel, keep_count: int = 1):
+async def purge_all_old_backups(channel: discord.TextChannel):
+    """Purges all previous backup messages in the channel to enforce single backup retention."""
     try:
-        backup_messages = []
         async for msg in channel.history(limit=100):
             if msg.author == channel.guild.me:
                 has_backup_file = any(att.filename.endswith(".json") for att in msg.attachments)
                 has_backup_text = "backup" in msg.content.lower() or "snapshot" in msg.content.lower()
                 if has_backup_file or has_backup_text:
-                    backup_messages.append(msg)
-
-        if len(backup_messages) > keep_count:
-            for old_msg in backup_messages[keep_count:]:
-                try:
-                    await old_msg.delete()
-                    await asyncio.sleep(0.35)
-                except (discord.NotFound, discord.HTTPException):
-                    pass
+                    try:
+                        await msg.delete()
+                        await asyncio.sleep(0.3)
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
     except Exception as e:
         print(f"Failed purging old backups: {e}")
 
 
 # ==============================================================================
-# UNIFIED BACKUP & SAFE RESTORATION
+# UNIFIED SINGLE BACKUP & RESTORATION ENGINE
 # ==============================================================================
 async def generate_unified_backup_payload(guild: discord.Guild) -> Dict[str, Any]:
+    await flush_xp_cache()
+
     categories_data = []
     for cat in guild.categories:
         cat_overwrites = {}
@@ -770,7 +786,7 @@ async def generate_unified_backup_payload(guild: discord.Guild) -> Dict[str, Any
     for cat in guild.categories:
         cat_blueprint = {"category": cat.name, "channels": []}
         for ch in cat.channels:
-            if ch.name in ["bot-memory", "📜・audit-logs", "🩸・bot-errors", "🧪・bot-testing"]:
+            if ch.name in SYSTEM_CHANNELS:
                 continue
             ch_type = "text"
             if isinstance(ch, discord.VoiceChannel):
@@ -820,6 +836,7 @@ async def generate_unified_backup_payload(guild: discord.Guild) -> Dict[str, Any
         ],
         "user_xp": XP_CACHE.copy(),
         "user_birthdays": await load_birthdays(),
+        "confessions": await safe_read_json(CONFESSIONS_FILE, {"last_id": 0, "entries": []}),
         "last_bump_time": LAST_BUMP_TIME.timestamp() if LAST_BUMP_TIME else None,
     }
 
@@ -832,6 +849,8 @@ async def apply_unified_restore(guild: discord.Guild, data: Dict[str, Any]) -> D
         "perms_applied": 0,
         "perms_skipped": 0,
         "xp_users": 0,
+        "birthdays": 0,
+        "confessions": 0,
     }
 
     saved_blueprint = data.get("blueprint")
@@ -859,17 +878,42 @@ async def apply_unified_restore(guild: discord.Guild, data: Dict[str, Any]) -> D
             except Exception:
                 pass
 
+    # 2. Restore Birthday Records
     raw_bdays = data.get("user_birthdays") or {}
     if raw_bdays:
         curr_bdays = await load_birthdays()
         curr_bdays.update(raw_bdays)
         await save_birthdays(curr_bdays)
+        stats["birthdays"] = len(curr_bdays)
 
+    # 3. Restore Confession State
+    raw_confessions = data.get("confessions")
+    if raw_confessions and isinstance(raw_confessions, dict):
+        curr_confessions = await safe_read_json(CONFESSIONS_FILE, {"last_id": 0, "entries": []})
+        merged_last_id = max(curr_confessions.get("last_id", 0), raw_confessions.get("last_id", 0))
+
+        existing_entry_ids = {e["id"] for e in curr_confessions.get("entries", []) if isinstance(e, dict) and "id" in e}
+        combined_entries = list(curr_confessions.get("entries", []))
+
+        for entry in raw_confessions.get("entries", []):
+            if isinstance(entry, dict) and entry.get("id") not in existing_entry_ids:
+                combined_entries.append(entry)
+                existing_entry_ids.add(entry["id"])
+
+        updated_confession_payload = {
+            "last_id": merged_last_id,
+            "entries": combined_entries,
+        }
+        await safe_write_json(CONFESSIONS_FILE, updated_confession_payload)
+        stats["confessions"] = len(combined_entries)
+
+    # 4. Restore Bump Time
     raw_bump = data.get("last_bump_time")
     if raw_bump:
         LAST_BUMP_TIME = datetime.datetime.fromtimestamp(raw_bump, datetime.timezone.utc)
         await persist_runtime_state()
 
+    # 5. Restore Categories, Channels, & Overwrites
     existing_cats = {normalize_name(c.name): c for c in guild.categories}
 
     for cat_data in data.get("categories", []):
@@ -950,7 +994,6 @@ async def apply_unified_restore(guild: discord.Guild, data: Dict[str, Any]) -> D
                     except Exception:
                         pass
 
-    # Strictly re-lock Admin Area after restoration
     await enforce_admin_area_security(guild)
     return stats
 
@@ -1026,7 +1069,7 @@ class ClaimXPDropView(View):
         self.claimed = False
         self.message: Optional[discord.Message] = None
 
-    @discord.ui.button(label="🎁 Claim XP", style=discord.ButtonStyle.green, custom_id="claim_xp_drop")
+    @discord.ui.button(label="🎁 Claim XP", style=discord.ButtonStyle.green)
     async def claim_button(self, interaction: discord.Interaction, button: Button):
         if self.claimed:
             return await interaction.response.send_message("❌ This XP drop has already been claimed!", ephemeral=True)
@@ -1062,7 +1105,7 @@ class SuperXPDropView(View):
         self.claimed = False
         self.message: Optional[discord.Message] = None
 
-    @discord.ui.button(label="⚡ CLAIM SUPER DROP ⚡", style=discord.ButtonStyle.danger, custom_id="claim_super_xp_drop")
+    @discord.ui.button(label="⚡ CLAIM SUPER DROP ⚡", style=discord.ButtonStyle.danger)
     async def claim_super_drop(self, interaction: discord.Interaction, button: Button):
         if self.claimed:
             return await interaction.response.send_message("❌ Too late! Someone already claimed this Super Drop!", ephemeral=True)
@@ -1112,7 +1155,7 @@ class ConfessionModal(Modal, title="Submit Anonymous Confession"):
         if not confession_ch:
             return await interaction.response.send_message("⚠️ Confession channel not found!", ephemeral=True)
 
-        confession_id = await get_next_confession_id()
+        confession_id = await record_confession(interaction.user.id, self.confession.value)
 
         embed = discord.Embed(
             title=f"💌 Anonymous Confession #{confession_id}",
@@ -1153,7 +1196,7 @@ class ConfessionPanelView(View):
         await interaction.response.send_modal(ConfessionModal())
 
 
-# --- Pure Aesthetic Colours ---
+# --- Colours Selection ---
 class ColourSelectionView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -1454,7 +1497,7 @@ class TicketView(View):
 
 
 # ==============================================================================
-# PANELS DEPLOYERS
+# PANEL DEPLOYERS
 # ==============================================================================
 async def deploy_confession_panel(guild: discord.Guild):
     confession_ch = discord.utils.get(guild.text_channels, name="🚦confession-🖇️") or discord.utils.get(
@@ -1636,8 +1679,9 @@ async def deploy_team_news_commands_panel(guild: discord.Guild, prefix: str = ".
     commands_embed.add_field(
         name="⭐ XP Management (Authority)",
         value=(
-            f"`{prefix}addxp <@user> <amount>` — Grants XP and automatically upgrades rank roles.\n"
-            f"`{prefix}removexp <@user> <amount>` — Deducts XP and updates tier roles accordingly."
+            f"`{prefix}addxp <@user> <amount>` — Grants XP and automatically recalculates rank roles.\n"
+            f"`{prefix}removexp <@user> <amount>` — Deducts XP and updates tier roles accordingly.\n"
+            f"`{prefix}setxp <@user> <amount>` — Sets exact XP and syncs corresponding rank roles."
         ),
         inline=False,
     )
@@ -1708,7 +1752,7 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     admin_embed.add_field(name=f"`{prefix}colours`", value="Deploys pure cosmetic colour picker in `🎨・colours`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_confession_panel`", value="Deploys anonymous confession box in `🚦confession-🖇️`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_notifications`", value="Deploys optional community notification toggles.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}backup_all` / `{prefix}restore_all`", value="Archives all structures and XP or restores them safely.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}backup_all` / `{prefix}restore_all`", value="Overwrites or restores the single unified master backup.", inline=False)
     admin_embed.add_field(name=f"`{prefix}maintenance [on/off/status]`", value="Toggles maintenance lockdown mode.", inline=False)
     admin_embed.add_field(name=f"`{prefix}shutdown [reason]`", value="Flushes state and terminates the bot cleanly.", inline=False)
 
@@ -1787,31 +1831,57 @@ class ArkBot(commands.Bot):
             xp_flush_task.start()
 
     async def _auto_restore_all_guilds(self):
+        """Restores first from the single master backup, then immediately overwrites it with a fresh snapshot."""
         await self.wait_until_ready()
         global BUMP_TIMER_TASK
 
-        for guild in self.guilds:
-            backup_file = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=guild.id)
-            boot_backup = await safe_read_json(backup_file, None)
+        try:
+            for guild in self.guilds:
+                backup_file = MASTER_BACKUP_TEMPLATE.format(guild_id=guild.id)
+                boot_backup = await safe_read_json(backup_file, None)
 
-            if not boot_backup or not boot_backup.get("user_xp"):
-                remote_backup = await find_latest_backup_from_discord(guild)
-                if remote_backup:
-                    boot_backup = remote_backup
-                    await safe_write_json(backup_file, boot_backup)
+                # If local master file doesn't exist, search Discord for latest
+                if not boot_backup or not boot_backup.get("categories"):
+                    remote_backup = await find_latest_backup_from_discord(guild)
+                    if remote_backup:
+                        boot_backup = remote_backup
 
-            if boot_backup:
-                stats = await apply_unified_restore(guild, boot_backup)
-                print(f"[Auto-Boot] Restored {stats['channels_created']} missing channels and {stats['xp_users']} XP profiles in {guild.name}.")
-            else:
-                for uid_str, xp_val in XP_CACHE.items():
-                    member = guild.get_member(int(uid_str))
-                    if member:
-                        await sync_member_level_roles(member, xp_val)
+                # Step 1: Restore first if backup exists
+                if boot_backup:
+                    stats = await apply_unified_restore(guild, boot_backup)
+                    print(
+                        f"[Auto-Boot] Restored {stats['channels_created']} channels, "
+                        f"{stats['xp_users']} XP profiles, {stats['birthdays']} birthdays, "
+                        f"{stats['confessions']} confessions in {guild.name}."
+                    )
+                else:
+                    for uid_str, xp_val in XP_CACHE.items():
+                        member = guild.get_member(int(uid_str))
+                        if member:
+                            await sync_member_level_roles(member, xp_val)
 
-            await enforce_admin_area_security(guild)
+                # Step 2: Overwrite existing backup with fresh snapshot
+                fresh_payload = await generate_unified_backup_payload(guild)
+                await safe_write_json(backup_file, fresh_payload)
 
-        self.restore_complete.set()
+                err_channel = discord.utils.get(guild.text_channels, name="🩸・bot-errors") or discord.utils.get(
+                    guild.text_channels, name="bot-errors"
+                )
+                if err_channel:
+                    await purge_all_old_backups(err_channel)
+                    file_stream = io.BytesIO(json.dumps(fresh_payload, indent=4).encode("utf-8"))
+                    backup_file_attachment = discord.File(file_stream, filename=f"master_backup_{guild.id}.json")
+                    await err_channel.send(
+                        content="🔒 **Master Single Backup Snapshot (Overwritten on Boot)**",
+                        file=backup_file_attachment,
+                    )
+
+                await enforce_admin_area_security(guild)
+        except Exception as e:
+            print(f"[Auto-Boot Critical Error]: {e}")
+            traceback.print_exc()
+        finally:
+            self.restore_complete.set()
 
         if LAST_BUMP_TIME:
             elapsed = (datetime.datetime.now(datetime.timezone.utc) - LAST_BUMP_TIME).total_seconds()
@@ -1945,44 +2015,16 @@ async def on_ready():
 
         if test_ch:
             embed = discord.Embed(
-                title="🧪 Arkbot Startup Self-Test & Diagnostic Report",
-                description="The bot has completed startup synchronization across all operational nodes.",
+                title="🧪 Arkbot Startup Diagnostic Report",
+                description="Startup synchronization complete across all operational nodes.",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow(),
             )
             embed.add_field(name="Gateway Latency", value=f"`{round(bot.latency * 1000)}ms`", inline=True)
-            embed.add_field(name="Channels Verified", value=f"`+{created_channels} created`", inline=True)
-            embed.add_field(name="Roles Verified", value=f"`+{created_roles} created`", inline=True)
-            embed.add_field(name="Active XP Profiles", value=f"`{len(XP_CACHE)} loaded`", inline=True)
-            embed.add_field(
-                name="Security & Panels Deployed",
-                value=(
-                    "• 🔒 **Admin Area Access**: Strictly restricted to Supreme Leader, Highness & Arkbot\n"
-                    "• 🛡️ **Team Rules**: `#🛡️・team-rules` (Rules Only)\n"
-                    "• 📰 **Staff Command Manual**: `#team-news` (Authority & Staff commands)\n"
-                    "• 🤖 **Master Manual**: `#💼・bot-commands`\n"
-                    "• 🎫 **Support Tickets**: `#🎫・tickets`\n"
-                    "• 🎨 **Cosmetic Colours (No Pings)**: `#🎨・colours`\n"
-                    "• 💌 **Confessions**: `#🚦confession-🖇️`"
-                ),
-                inline=False,
-            )
+            embed.add_field(name="Channels Provisioned", value=f"`+{created_channels} created`", inline=True)
+            embed.add_field(name="Roles Provisioned", value=f"`+{created_roles} created`", inline=True)
+            embed.add_field(name="XP Profiles", value=f"`{len(XP_CACHE)} loaded`", inline=True)
             await test_ch.send(embed=embed)
-
-        err_channel = discord.utils.get(guild.text_channels, name="🩸・bot-errors")
-        if err_channel:
-            payload = await generate_unified_backup_payload(guild)
-            backup_file_path = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=guild.id)
-            await safe_write_json(backup_file_path, payload)
-
-            file_stream = io.BytesIO(json.dumps(payload, indent=4).encode("utf-8"))
-            backup_file = discord.File(file_stream, filename=f"startup_backup_{guild.id}.json")
-
-            await err_channel.send(
-                content="🔒 **Automated Fresh Reboot Snapshot (Previous backups purged)**",
-                file=backup_file,
-            )
-            await purge_all_old_backups(err_channel, keep_count=1)
 
     if not UPDATE_NOTIFIED:
         for guild in bot.guilds:
@@ -1990,7 +2032,7 @@ async def on_ready():
             if team_news_ch:
                 embed = discord.Embed(
                     title="🚀 Arkbot Operational — Full Engine Online!",
-                    description="Leveling, auto-backups, bump trackers, chat revive, and moderation engines are online.",
+                    description="Leveling, master auto-backups, bump trackers, and moderation engines are online.",
                     color=discord.Color.green(),
                     timestamp=discord.utils.utcnow(),
                 )
@@ -2072,7 +2114,7 @@ async def on_member_remove(member: discord.Member):
         embed.add_field(name="User", value=f"{member} ({member.id})", inline=False)
         try:
             await log_ch.send(embed=embed)
-        except discord.HTTPException:
+        except (discord.HTTPException, discord.Forbidden):
             pass
 
 
@@ -2208,7 +2250,7 @@ async def on_message(message: discord.Message):
                 delete_after=4,
             )
 
-    # 4. Chat XP Gain & Super Drop Trigger
+    # 4. Standard Chat XP Gain
     if message.guild and not ctx.valid:
         now_ts = discord.utils.utcnow().timestamp()
         last_xp = USER_CHAT_XP_COOLDOWN.get(message.author.id, 0.0)
@@ -2218,7 +2260,15 @@ async def on_message(message: discord.Message):
             prev_xp, new_xp = await add_user_xp(message.author.id, gained)
             await handle_level_up(message.author, prev_xp, new_xp, message.channel)
 
-        if isinstance(message.channel, discord.TextChannel) and message.channel.name not in SYSTEM_CHANNELS:
+        # 5. Super Drop Trigger (Strictly locked to Chill Area channels)
+        is_chill_area = (
+            isinstance(message.channel, discord.TextChannel)
+            and message.channel.category
+            and "chill area" in message.channel.category.name.lower()
+            and message.channel.name not in SYSTEM_CHANNELS
+        )
+
+        if is_chill_area:
             activity_queue = CHANNEL_CHAT_ACTIVITY[message.channel.id]
             activity_queue.append((message.author.id, now_ts))
 
@@ -2234,7 +2284,7 @@ async def on_message(message: discord.Message):
                     super_embed = discord.Embed(
                         title="🚨 🔥 SUPER XP DROP INCOMING! 🔥 🚨",
                         description=(
-                            f"The chat is blazing hot with active members! A **SUPER DROP** has spawned!\n\n"
+                            f"The Chill Area is blazing hot with active members! A **SUPER DROP** has spawned!\n\n"
                             f"🎁 **Reward Range:** `1,000 - 5,000 XP`\n"
                             f"💎 **This Drop:** `+{super_xp:,} XP`\n\n"
                             f"**Click below immediately to claim it!** *(Disappears in 3 minutes)*"
@@ -2242,7 +2292,7 @@ async def on_message(message: discord.Message):
                         color=discord.Color.from_rgb(255, 69, 0),
                         timestamp=discord.utils.utcnow(),
                     )
-                    super_embed.set_footer(text="Triggered by High Server Activity (4h Interval) • Chill-Verse")
+                    super_embed.set_footer(text="Triggered in Chill Area • Chill-Verse")
 
                     view = SuperXPDropView(xp_amount=super_xp)
                     try:
@@ -2269,9 +2319,12 @@ async def xp_drop_task():
         return
 
     for guild in bot.guilds:
-        eligible_channels: List[discord.TextChannel] = []
+        chill_cat = discord.utils.find(lambda c: "chill area" in c.name.lower(), guild.categories)
+        if not chill_cat:
+            continue
 
-        for ch in guild.text_channels:
+        eligible_channels: List[discord.TextChannel] = []
+        for ch in chill_cat.text_channels:
             if ch.name in SYSTEM_CHANNELS:
                 continue
 
@@ -2298,7 +2351,7 @@ async def xp_drop_task():
             color=discord.Color.gold(),
             timestamp=discord.utils.utcnow(),
         )
-        embed.set_footer(text="Community Drop (Every 2 Hours) • Chill-Verse")
+        embed.set_footer(text="Chill Area Community Drop (Every 2 Hours) • Chill-Verse")
 
         view = ClaimXPDropView(xp_amount=drop_xp)
         try:
@@ -2310,23 +2363,26 @@ async def xp_drop_task():
 
 @tasks.loop(hours=1.0)
 async def hourly_backup_task():
+    """Overwrites the single master backup hourly locally and purges old Discord copies."""
     await bot.wait_until_ready()
     for guild in bot.guilds:
-        backup_channel = discord.utils.get(guild.text_channels, name="🩸・bot-errors")
+        backup_channel = discord.utils.get(guild.text_channels, name="🩸・bot-errors") or discord.utils.get(
+            guild.text_channels, name="bot-errors"
+        )
         if not backup_channel:
             continue
 
         payload = await generate_unified_backup_payload(guild)
-        backup_file_path = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=guild.id)
+        backup_file_path = MASTER_BACKUP_TEMPLATE.format(guild_id=guild.id)
         await safe_write_json(backup_file_path, payload)
 
-        file = discord.File(io.BytesIO(json.dumps(payload, indent=4).encode("utf-8")), filename="server_backup.json")
+        await purge_all_old_backups(backup_channel)
+        file = discord.File(io.BytesIO(json.dumps(payload, indent=4).encode("utf-8")), filename=f"master_backup_{guild.id}.json")
         try:
             await backup_channel.send(
-                content="🔒 **Automated Hourly Snapshot (Channels, Perms, Blueprint, XP)**",
+                content="🔒 **Master Hourly Single Snapshot (Auto-Overwritten)**",
                 file=file,
             )
-            await purge_all_old_backups(backup_channel, keep_count=1)
         except Exception:
             pass
 
@@ -2532,7 +2588,8 @@ async def check_xp(ctx: commands.Context, member: Optional[discord.Member] = Non
     await ctx.send(embed=embed)
 
 
-@bot.command(name="addxp", aliases=["givexp"])
+# --- Manual XP Suite (Add, Remove, Set) ---
+@bot.command(name="addxp", aliases=["givexp", "add-xp"])
 @is_authority_holder()
 async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
     if amount <= 0:
@@ -2550,7 +2607,7 @@ async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
             f"Successfully added **+{amount:,} XP** to {member.mention}!\n\n"
             f"📊 **Total XP:** `{new_xp:,} XP`\n"
             f"🎖️ **Level:** `Level {new_lvl}` "
-            + (f"*(Ranked up from {old_lvl}!)*" if new_lvl > old_lvl else "")
+            + (f"*(Ranked up from Level {old_lvl}!)*" if new_lvl > old_lvl else "")
             + "\n"
             f"🛡️ **Current Tier:** {current_tier_role.mention if current_tier_role else '`None`'}"
         ),
@@ -2558,11 +2615,11 @@ async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
         timestamp=discord.utils.utcnow(),
     )
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text=f"Granted by {ctx.author.display_name}")
+    embed.set_footer(text=f"Action by {ctx.author.display_name}")
     await ctx.send(embed=embed)
 
 
-@bot.command(name="removexp", aliases=["takexp", "delxp"])
+@bot.command(name="removexp", aliases=["takexp", "delxp", "remove-xp"])
 @is_authority_holder()
 async def removexp(ctx: commands.Context, member: discord.Member, amount: int):
     if amount <= 0:
@@ -2580,7 +2637,7 @@ async def removexp(ctx: commands.Context, member: discord.Member, amount: int):
             f"Successfully deducted **-{amount:,} XP** from {member.mention}.\n\n"
             f"📊 **Total XP:** `{new_xp:,} XP`\n"
             f"🎖️ **Level:** `Level {new_lvl}` "
-            + (f"*(Demoted from {old_lvl})*" if new_lvl < old_lvl else "")
+            + (f"*(Demoted from Level {old_lvl})*" if new_lvl < old_lvl else "")
             + "\n"
             f"🛡️ **Current Tier:** {current_tier_role.mention if current_tier_role else '`None`'}"
         ),
@@ -2588,7 +2645,35 @@ async def removexp(ctx: commands.Context, member: discord.Member, amount: int):
         timestamp=discord.utils.utcnow(),
     )
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text=f"Deducted by {ctx.author.display_name}")
+    embed.set_footer(text=f"Action by {ctx.author.display_name}")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="setxp", aliases=["set-xp"])
+@is_authority_holder()
+async def setxp(ctx: commands.Context, member: discord.Member, amount: int):
+    if amount < 0:
+        return await ctx.send("⚠️ XP cannot be a negative value.", delete_after=5)
+
+    prev_xp, new_xp = await set_user_xp(member.id, amount)
+    old_lvl = calculate_level(prev_xp)
+    new_lvl = calculate_level(new_xp)
+
+    current_tier_role = await sync_member_level_roles(member, new_xp)
+
+    embed = discord.Embed(
+        title="⚙️ XP Manually Overridden",
+        description=(
+            f"Successfully updated total XP for {member.mention}.\n\n"
+            f"📊 **Previous:** `{prev_xp:,} XP` (Level {old_lvl})\n"
+            f"📊 **New Total:** `{new_xp:,} XP` (Level {new_lvl})\n"
+            f"🛡️ **Current Tier:** {current_tier_role.mention if current_tier_role else '`None`'}"
+        ),
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"Action by {ctx.author.display_name}")
     await ctx.send(embed=embed)
 
 
@@ -2796,7 +2881,7 @@ async def purge(ctx: commands.Context, amount: int = 10, target: Optional[Union[
 
 
 # ==============================================================================
-# BLUEPRINT, PANELS & SYSTEM MANAGEMENT
+# BLUEPRINT, PANELS & MASTER BACKUP CONTROLS
 # ==============================================================================
 @bot.command(name="setup_channels")
 @commands.has_permissions(administrator=True)
@@ -3055,22 +3140,25 @@ async def afk(ctx: commands.Context, *, reason: Optional[str] = None):
 @bot.command(name="backup_all")
 @commands.has_permissions(administrator=True)
 async def backup_all(ctx: commands.Context):
-    status_msg = await ctx.send("🔄 **Generating complete unified backup snapshot...**")
+    """Generates the single unified master backup and overwrites previous ones."""
+    status_msg = await ctx.send("🔄 **Generating single master backup & overwriting previous snapshots...**")
     payload = await generate_unified_backup_payload(ctx.guild)
-    backup_file_path = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
+    backup_file_path = MASTER_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
     await safe_write_json(backup_file_path, payload)
 
     file_stream = io.BytesIO(json.dumps(payload, indent=4).encode("utf-8"))
-    file = discord.File(file_stream, filename=f"chillverse_full_backup_{ctx.guild.id}.json")
+    file = discord.File(file_stream, filename=f"master_backup_{ctx.guild.id}.json")
 
     embed = discord.Embed(
-        title="🔒 Full System Backup Generated",
+        title="🔒 Single Master Backup Overwritten",
         description=(
-            f"Successfully archived:\n"
+            f"Successfully archived all server systems into one master file:\n"
             f"• **Categories & Channels:** `{len(payload['categories'])}`\n"
             f"• **Blueprint Layouts:** Synchronized\n"
-            f"• **Database Records:** `{len(payload['user_xp'])}` member profiles\n\n"
-            f"*This snapshot is set as your **local auto-restore point on reboot**.*"
+            f"• **User XP Profiles:** `{len(payload['user_xp'])}`\n"
+            f"• **Birthdays Recorded:** `{len(payload['user_birthdays'])}`\n"
+            f"• **Confessions Stored:** `{len(payload['confessions'].get('entries', []))}`\n\n"
+            f"*Previous backups cleared. This is now the sole recovery point.*"
         ),
         color=discord.Color.blue(),
         timestamp=discord.utils.utcnow(),
@@ -3078,20 +3166,23 @@ async def backup_all(ctx: commands.Context):
     await status_msg.delete()
     await ctx.send(embed=embed, file=file)
 
-    err_channel = discord.utils.get(ctx.guild.text_channels, name="🩸・bot-errors")
+    err_channel = discord.utils.get(ctx.guild.text_channels, name="🩸・bot-errors") or discord.utils.get(
+        ctx.guild.text_channels, name="bot-errors"
+    )
     if err_channel:
+        await purge_all_old_backups(err_channel)
         file_stream.seek(0)
         await err_channel.send(
-            content="🔒 **Manual Backup Snapshot Saved**",
-            file=discord.File(file_stream, filename=f"manual_backup_{ctx.guild.id}.json"),
+            content="🔒 **Master System Backup (Single Instance)**",
+            file=discord.File(file_stream, filename=f"master_backup_{ctx.guild.id}.json"),
         )
-        await purge_all_old_backups(err_channel, keep_count=1)
 
 
 @bot.command(name="restore_all")
 @commands.has_permissions(administrator=True)
 async def restore_all(ctx: commands.Context):
-    status_msg = await ctx.send("🔄 **Scanning for backup source (Uploaded File or Server Channel History)...**")
+    """Restores from the single master backup and overwrites the backup point."""
+    status_msg = await ctx.send("🔄 **Scanning for single master backup source...**")
     backup_data = None
     source_description = ""
 
@@ -3106,9 +3197,11 @@ async def restore_all(ctx: commands.Context):
                 return await status_msg.edit(content=f"⚠️ Failed to parse attached JSON: `{e}`")
 
     if not backup_data:
-        err_channel = discord.utils.get(ctx.guild.text_channels, name="🩸・bot-errors")
+        err_channel = discord.utils.get(ctx.guild.text_channels, name="🩸・bot-errors") or discord.utils.get(
+            ctx.guild.text_channels, name="bot-errors"
+        )
         if err_channel:
-            await status_msg.edit(content="🔍 **No file attached. Searching latest backup in `🩸・bot-errors`...**")
+            await status_msg.edit(content="🔍 **Searching master snapshot in `🩸・bot-errors`...**")
             async for msg in err_channel.history(limit=50):
                 if msg.author == ctx.guild.me and msg.attachments:
                     for att in msg.attachments:
@@ -3116,7 +3209,7 @@ async def restore_all(ctx: commands.Context):
                             try:
                                 content = await att.read()
                                 backup_data = json.loads(content.decode("utf-8"))
-                                source_description = f"Latest Server Snapshot `{att.filename}` in {err_channel.mention}"
+                                source_description = f"Discord Master Snapshot `{att.filename}`"
                                 break
                             except Exception:
                                 continue
@@ -3124,32 +3217,48 @@ async def restore_all(ctx: commands.Context):
                     break
 
     if not backup_data:
-        local_path = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
+        local_path = MASTER_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
         backup_data = await safe_read_json(local_path, None)
         if backup_data:
-            source_description = f"Local System File `{local_path}`"
+            source_description = f"Local Master File `{local_path}`"
 
     if not backup_data:
         return await status_msg.edit(
-            content="⚠️ **No backup found!** Either attach a `.json` backup file or ensure a backup exists in `🩸・bot-errors`."
+            content="⚠️ **No master backup found!** Either attach a `.json` backup file or ensure one exists in `🩸・bot-errors`."
         )
 
-    await status_msg.edit(content=f"🔄 **Restoring non-destructively from {source_description}...**")
+    await status_msg.edit(content=f"🔄 **Restoring system from {source_description}...**")
 
-    local_path = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
-    await safe_write_json(local_path, backup_data)
     stats = await apply_unified_restore(ctx.guild, backup_data)
 
+    # Overwrite the master backup after restoration
+    fresh_payload = await generate_unified_backup_payload(ctx.guild)
+    local_path = MASTER_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
+    await safe_write_json(local_path, fresh_payload)
+
+    err_channel = discord.utils.get(ctx.guild.text_channels, name="🩸・bot-errors") or discord.utils.get(
+        ctx.guild.text_channels, name="bot-errors"
+    )
+    if err_channel:
+        await purge_all_old_backups(err_channel)
+        file_stream = io.BytesIO(json.dumps(fresh_payload, indent=4).encode("utf-8"))
+        await err_channel.send(
+            content="🔒 **Master System Backup (Overwritten Post-Restore)**",
+            file=discord.File(file_stream, filename=f"master_backup_{ctx.guild.id}.json"),
+        )
+
     embed = discord.Embed(
-        title="✅ Full System Restored Safely",
+        title="✅ System Restored & Master Backup Overwritten",
         description=(
             f"Restoration from **{source_description}** complete:\n\n"
             f"• **Missing Channels Rebuilt:** `{stats['channels_created']}`\n"
             f"• **Missing Permissions Applied:** `{stats['perms_applied']}`\n"
             f"• **Existing Overwrites Preserved (Skipped):** `{stats['perms_skipped']}`\n"
-            f"• **User XP Profiles Loaded:** `{stats['xp_users']}`\n"
+            f"• **User XP Profiles Synchronized:** `{stats['xp_users']}`\n"
+            f"• **Birthdays Restored:** `{stats['birthdays']}`\n"
+            f"• **Confessions Restored:** `{stats['confessions']}`\n"
             f"• **Admin Area Security:** Strictly Supreme Leader, Highness & Arkbot only\n\n"
-            f"*Zero existing channels or configurations were modified, overwritten, or duplicated.*"
+            f"*The single master backup has been overwritten with current verified server state.*"
         ),
         color=discord.Color.green(),
         timestamp=discord.utils.utcnow(),
@@ -3189,7 +3298,7 @@ async def shutdown(ctx: commands.Context, *, reason: str = "Scheduled system mai
     confirm_msg = await ctx.send(
         "⚠️ **Initiating Maintenance Shutdown Protocol...**\n"
         "• Flushing database states to disk\n"
-        "• Archiving channels, permissions & blueprint\n"
+        "• Archiving single master backup\n"
         "• Shutting down runtime process..."
     )
 
@@ -3207,21 +3316,24 @@ async def shutdown(ctx: commands.Context, *, reason: str = "Scheduled system mai
     for guild in bot.guilds:
         try:
             payload = await generate_unified_backup_payload(guild)
-            backup_file_path = AUTO_BOOT_BACKUP_TEMPLATE.format(guild_id=guild.id)
+            backup_file_path = MASTER_BACKUP_TEMPLATE.format(guild_id=guild.id)
             await safe_write_json(backup_file_path, payload)
 
-            err_channel = discord.utils.get(guild.text_channels, name="🩸・bot-errors")
+            err_channel = discord.utils.get(guild.text_channels, name="🩸・bot-errors") or discord.utils.get(
+                guild.text_channels, name="bot-errors"
+            )
             if err_channel:
+                await purge_all_old_backups(err_channel)
                 file_stream = io.BytesIO(json.dumps(payload, indent=4).encode("utf-8"))
-                backup_file = discord.File(file_stream, filename=f"pre_maintenance_backup_{guild.id}.json")
+                backup_file = discord.File(file_stream, filename=f"master_backup_{guild.id}.json")
 
                 shutdown_embed = discord.Embed(
                     title="🛑 SYSTEM MAINTENANCE SHUTDOWN",
                     description=(
                         f"**Authorized by:** {ctx.author.mention}\n"
                         f"**Reason:** *{reason}*\n\n"
-                        "🔒 **Pre-Shutdown Full Backup Attached.**\n"
-                        "All runtime states, XP databases, and channel permission rules have been preserved.\n"
+                        "🔒 **Pre-Shutdown Single Master Backup Attached.**\n"
+                        "All runtime states, XP databases, channel configurations, and birthdays have been preserved.\n"
                         "The bot process is now disconnecting from Discord."
                     ),
                     color=discord.Color.dark_red(),
@@ -3229,15 +3341,14 @@ async def shutdown(ctx: commands.Context, *, reason: str = "Scheduled system mai
                 )
                 shutdown_embed.set_footer(text="Arkbot Architecture Shutdown Engine")
                 await err_channel.send(embed=shutdown_embed, file=backup_file)
-                await purge_all_old_backups(err_channel, keep_count=1)
         except Exception as e:
             print(f"[Maintenance Shutdown Error] Guild {guild.id}: {e}")
 
     final_embed = discord.Embed(
         title="🛑 Process Termination Completed",
         description=(
-            "✅ Full state snapshot archived to disk.\n"
-            "✅ Backup JSON uploaded to `🩸・bot-errors`.\n"
+            "✅ Single master snapshot archived to disk.\n"
+            "✅ Clean master backup uploaded to `🩸・bot-errors`.\n"
             "🔌 Disconnecting gateway and exiting process now."
         ),
         color=discord.Color.red(),
