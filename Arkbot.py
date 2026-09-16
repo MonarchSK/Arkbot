@@ -37,6 +37,7 @@ LAST_BUMP_TIME: Optional[datetime.datetime] = None
 BUMP_TIMER_TASK: Optional[asyncio.Task] = None
 BUMP_COOLDOWN_SECONDS = 7200  # 2 Hours
 ANNOUNCED_BIRTHDAYS_TODAY: List[int] = []
+REMINDED_BIRTHDAYS_TOMORROW: List[int] = []
 
 # Chat Revive State & Cooldowns
 LAST_REVIVE_TIME: Dict[int, float] = {}
@@ -155,7 +156,7 @@ REVIVE_ICEBREAKERS = [
 ]
 
 # ==============================================================================
-# SERVER BLUEPRINT
+# SERVER BLUEPRINT (INCLUDES PUZZLES IN FUN AREA)
 # ==============================================================================
 SERVER_BLUEPRINT: List[Dict[str, Any]] = [
     {
@@ -209,6 +210,7 @@ SERVER_BLUEPRINT: List[Dict[str, Any]] = [
             {"name": "memes🤪", "type": "text", "restricted": False},
             {"name": "🖇️-daily-polls", "type": "text", "restricted": False},
             {"name": "🖇️-roblox-elites", "type": "text", "restricted": False},
+            {"name": "🧩・puzzles", "type": "text", "restricted": False},
         ],
     },
     {
@@ -390,13 +392,14 @@ async def persist_runtime_state():
             for uid, info in AFK_USERS.items()
         },
         "announced_birthdays_today": ANNOUNCED_BIRTHDAYS_TODAY,
+        "reminded_birthdays_tomorrow": REMINDED_BIRTHDAYS_TOMORROW,
         "maintenance_mode": MAINTENANCE_MODE,
     }
     await safe_write_json(STATE_FILE, state)
 
 
 async def restore_runtime_state():
-    global LAST_BUMP_TIME, AFK_USERS, ANNOUNCED_BIRTHDAYS_TODAY, MAINTENANCE_MODE
+    global LAST_BUMP_TIME, AFK_USERS, ANNOUNCED_BIRTHDAYS_TODAY, REMINDED_BIRTHDAYS_TOMORROW, MAINTENANCE_MODE
     state = await safe_read_json(STATE_FILE, {})
     if not state:
         return
@@ -417,6 +420,7 @@ async def restore_runtime_state():
             continue
 
     ANNOUNCED_BIRTHDAYS_TODAY = state.get("announced_birthdays_today", [])
+    REMINDED_BIRTHDAYS_TOMORROW = state.get("reminded_birthdays_tomorrow", [])
     MAINTENANCE_MODE = state.get("maintenance_mode", False)
 
 
@@ -719,7 +723,7 @@ async def find_latest_backup_from_discord(guild: discord.Guild) -> Optional[Dict
 
 
 async def purge_all_old_backups(channel: discord.TextChannel):
-    """Purges all previous backup messages in the channel to enforce single backup retention."""
+    """Enforces single master backup retention by removing previous backups."""
     try:
         async for msg in channel.history(limit=100):
             if msg.author == channel.guild.me:
@@ -1060,7 +1064,7 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
 
 
 # ==============================================================================
-# UI COMPONENTS (XP DROPS, CONFESSIONS, COLOURS, NOTIFICATIONS, TICKETS)
+# UI COMPONENTS (XP DROPS, CONFESSIONS, COLOURS, NOTIFICATIONS, TICKETS, BIRTHDAYS)
 # ==============================================================================
 class ClaimXPDropView(View):
     def __init__(self, xp_amount: int):
@@ -1194,6 +1198,54 @@ class ConfessionPanelView(View):
     @discord.ui.button(label="🤫 Submit Confession", style=discord.ButtonStyle.secondary, custom_id="persistent_submit_confession", emoji="💌")
     async def submit_btn(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(ConfessionModal())
+
+
+# --- Birthday Registration Panel & Modal ---
+class BirthdayModal(Modal, title="Register Your Birthday"):
+    birthday_input = TextInput(
+        label="Date of Birth (DD/MM or DD/MM/YYYY)",
+        placeholder="e.g. 24/09 or 24/09/2004",
+        required=True,
+        max_length=10,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        val = self.birthday_input.value.strip()
+        dob_match = re.match(r"^(\d{1,2})[/\-.](\d{1,2})", val)
+        if not dob_match:
+            return await interaction.response.send_message(
+                "⚠️ Invalid format! Please enter your birthday in `DD/MM` or `DD/MM/YYYY` format (e.g. `14/06`).",
+                ephemeral=True,
+            )
+
+        day = int(dob_match.group(1))
+        month = int(dob_match.group(2))
+
+        if day < 1 or day > 31 or month < 1 or month > 12:
+            return await interaction.response.send_message("⚠️ That calendar date is invalid. Please enter a valid date.", ephemeral=True)
+
+        day_str = str(day).zfill(2)
+        month_str = str(month).zfill(2)
+        formatted_bdate = f"{day_str}/{month_str}"
+
+        bdays = await load_birthdays()
+        bdays[str(interaction.user.id)] = formatted_bdate
+        await save_birthdays(bdays)
+
+        await interaction.response.send_message(
+            f"🎂 **Birthday Registered!** Your birthday has been recorded as **{formatted_bdate}**.\n"
+            f"Chill-Verse will send you a community celebration and pre-alert when your day arrives!",
+            ephemeral=True,
+        )
+
+
+class BirthdayPanelView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🎂 Register / Update Birthday", style=discord.ButtonStyle.primary, custom_id="persistent_register_birthday", emoji="🎉")
+    async def register_birthday_btn(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(BirthdayModal())
 
 
 # --- Colours Selection ---
@@ -1499,6 +1551,39 @@ class TicketView(View):
 # ==============================================================================
 # PANEL DEPLOYERS
 # ==============================================================================
+async def deploy_birthday_panel(guild: discord.Guild):
+    bday_ch = discord.utils.get(guild.text_channels, name="birthdays")
+    if not bday_ch:
+        return
+
+    try:
+        async for msg in bday_ch.history(limit=25):
+            if msg.author == guild.me and msg.embeds and "Birthday Calendar & Registration" in (msg.embeds[0].title or ""):
+                return
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title="🎂 Chill-Verse Birthday Calendar & Registration",
+        description=(
+            "Never miss a community celebration!\n\n"
+            "Click **Register / Update Birthday** below to submit your special day.\n\n"
+            "• **Automated Wishes**: Chill-Verse will announce and celebrate with you when your birthday arrives!\n"
+            "• **Advance Notice**: The server receives a reminder alert 24 hours prior!\n"
+            "• **Upcoming List**: Type `.birthdays` anytime to view all upcoming server birthdays."
+        ),
+        color=discord.Color.gold(),
+    )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text="Chill-Verse Celebrations • Click Below to Register")
+
+    try:
+        await bday_ch.send(embed=embed, view=BirthdayPanelView())
+    except discord.HTTPException as e:
+        print(f"[Birthday Panel Deploy Error]: {e}")
+
+
 async def deploy_confession_panel(guild: discord.Guild):
     confession_ch = discord.utils.get(guild.text_channels, name="🚦confession-🖇️") or discord.utils.get(
         guild.text_channels, name="confessions"
@@ -1677,11 +1762,13 @@ async def deploy_team_news_commands_panel(guild: discord.Guild, prefix: str = ".
     )
 
     commands_embed.add_field(
-        name="⭐ XP Management (Authority)",
+        name="⭐ XP Management & Spawners (Authority)",
         value=(
             f"`{prefix}addxp <@user> <amount>` — Grants XP and automatically recalculates rank roles.\n"
             f"`{prefix}removexp <@user> <amount>` — Deducts XP and updates tier roles accordingly.\n"
-            f"`{prefix}setxp <@user> <amount>` — Sets exact XP and syncs corresponding rank roles."
+            f"`{prefix}setxp <@user> <amount>` — Sets exact XP and syncs corresponding rank roles.\n"
+            f"`{prefix}superdrop [amount] [#ch]` — Spawns a massive Super XP drop.\n"
+            f"`{prefix}xpdrop [amount] [#ch]` — Spawns a standard wild XP drop."
         ),
         inline=False,
     )
@@ -1705,6 +1792,7 @@ async def deploy_team_news_commands_panel(guild: discord.Guild, prefix: str = ".
 
 
 async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
+    """Deploys a complete, categorized breakdown of EVERY single bot command."""
     cmd_channel = discord.utils.get(guild.text_channels, name="💼・bot-commands") or discord.utils.get(
         guild.text_channels, name="bot-commands"
     )
@@ -1722,46 +1810,82 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
 
     header_embed = discord.Embed(
         title="🤖 CHILL-VERSE BOT MASTER COMMAND DIRECTORY",
-        description="Reference manual for all general, staff, and system administrative commands.",
+        description=(
+            "Welcome to the official, complete command index for **Arkbot**.\n"
+            "Below is the comprehensive list of all member, staff, moderation, and system commands.\n\n"
+            f"📌 **Default Prefix:** `{prefix}` *(Example: `{prefix}ping`)*"
+        ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
     if guild.icon:
         header_embed.set_thumbnail(url=guild.icon.url)
-    header_embed.add_field(name="📌 Active Prefix", value=f"`{prefix}` *(Example: `{prefix}ping`)*", inline=False)
 
-    public_embed = discord.Embed(
+    member_embed = discord.Embed(
         title="👥 1. General & Member Commands",
-        description="Accessible to verified members in public channels:",
+        description="Commands accessible to all verified community members:",
         color=discord.Color.green(),
     )
-    public_embed.add_field(name=f"`{prefix}ping`", value="Checks websocket heartbeat latency in milliseconds.", inline=False)
-    public_embed.add_field(name=f"`{prefix}bump`", value="Bumps Chill-Verse in `⏰・bump` for **+250 XP**.", inline=False)
-    public_embed.add_field(name=f"`{prefix}revive` / `{prefix}chatrevive [topic]`", value="Pings **@Chat Revive** with an icebreaker prompt.", inline=False)
-    public_embed.add_field(name=f"`{prefix}xp` / `{prefix}rank` / `{prefix}level [@user]`", value="Inspects rank, level, and XP points.", inline=False)
-    public_embed.add_field(name=f"`{prefix}afk [reason]`", value="Sets an AFK status and notifies anyone who pings you.", inline=False)
+    member_embed.add_field(name=f"`{prefix}ping`", value="Checks the bot websocket heartbeat and gateway latency.", inline=False)
+    member_embed.add_field(name=f"`{prefix}bump`", value="Bumps Chill-Verse in `⏰・bump` for **+250 XP** (2-hour server cooldown).", inline=False)
+    member_embed.add_field(name=f"`{prefix}revive` / `{prefix}chatrevive [topic]`", value="Pings **@Chat Revive** with a random icebreaker or custom topic.", inline=False)
+    member_embed.add_field(name=f"`{prefix}xp` / `{prefix}rank` / `{prefix}level [@user]`", value="Inspects your own or another member's level, rank, and XP progress.", inline=False)
+    member_embed.add_field(name=f"`{prefix}birthdays` / `{prefix}upcoming_birthdays`", value="Displays upcoming community birthdays and active celebrations.", inline=False)
+    member_embed.add_field(name=f"`{prefix}afk [reason]`", value="Sets an AFK status. Notifies anyone who pings you and greets you upon return.", inline=False)
+
+    mod_embed = discord.Embed(
+        title="🛡️ 2. Authority, Moderation & Access Control",
+        description="Reserved for **Authority**, **Highness**, and **Supreme Leader**:",
+        color=discord.Color.orange(),
+    )
+    mod_embed.add_field(name=f"`{prefix}purge <1-1000> [target]`", value="Bulk deletes messages with support for filters (`@user`, `bot`, `links`).", inline=False)
+    mod_embed.add_field(name=f"`{prefix}lock [optional #channel]`", value="Locks the channel, preventing regular members from sending messages.", inline=False)
+    mod_embed.add_field(name=f"`{prefix}unlock [optional #channel]`", value="Unlocks the channel, restoring normal chatting permissions.", inline=False)
+    mod_embed.add_field(name=f"`{prefix}hide [optional #channel]`", value="Hides the channel visibility completely from standard members.", inline=False)
+    mod_embed.add_field(name=f"`{prefix}show [optional #channel]`", value="Makes a hidden channel visible to standard members again.", inline=False)
+    mod_embed.add_field(name=f"`{prefix}permit <@user / @role>`", value="Explicitly whitelists a user or role to view and speak in the current channel.", inline=False)
+    mod_embed.add_field(name=f"`{prefix}revoke <@user / @role>`", value="Removes explicit channel overrides for the target user or role.", inline=False)
+    mod_embed.add_field(name=f"`{prefix}remove_bot_role <@role / @bot / all>`", value="Immediately strips room access for external bots.", inline=False)
+    mod_embed.add_field(name=f"`{prefix}announce [#channel] <title> | <text> [--everyone/--here]`", value="Dispatches a formatted official announcement embed.", inline=False)
+
+    xp_embed = discord.Embed(
+        title="⭐ 3. XP Engine & Manual Spawners",
+        description="Tools to grant, modify, and manually spawn interactive XP drops:",
+        color=discord.Color.gold(),
+    )
+    xp_embed.add_field(name=f"`{prefix}addxp <@user> <amount>`", value="Grants XP to a member and automatically upgrades rank tier roles.", inline=False)
+    xp_embed.add_field(name=f"`{prefix}removexp <@user> <amount>`", value="Deducts XP from a member and demotes rank tier roles if needed.", inline=False)
+    xp_embed.add_field(name=f"`{prefix}setxp <@user> <amount>`", value="Directly sets a member's XP to an exact number and recalculates rank tiers.", inline=False)
+    xp_embed.add_field(name=f"`{prefix}superdrop [amount] [#ch]`", value="**Manually spawns a Super XP Drop** (defaults to 1,000–5,000 XP).", inline=False)
+    xp_embed.add_field(name=f"`{prefix}xpdrop [amount] [#ch]`", value="**Manually spawns a Standard XP Drop** (defaults to 50–150 XP).", inline=False)
 
     admin_embed = discord.Embed(
-        title="⚙️ 2. Administrative, Backups & Blueprint Controls",
-        description="System disaster recovery suite *(Supreme Leader & Highness Only)*:",
+        title="⚙️ 4. Administration, Panels & Disaster Recovery",
+        description="System recovery suite restricted to **Supreme Leader** & **Highness**:",
         color=discord.Color.red(),
     )
-    admin_embed.add_field(name=f"`{prefix}setup_channels`", value="Non-destructively provisions missing channels from blueprint.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}setup_roles`", value="Generates missing tier, ping, and reaction roles.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}setup_tickets`", value="Deploys ticket and staff application panel in `🎫・tickets`.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}colours`", value="Deploys pure cosmetic colour picker in `🎨・colours`.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}setup_confession_panel`", value="Deploys anonymous confession box in `🚦confession-🖇️`.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}setup_notifications`", value="Deploys optional community notification toggles.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}backup_all` / `{prefix}restore_all`", value="Overwrites or restores the single unified master backup.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}maintenance [on/off/status]`", value="Toggles maintenance lockdown mode.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}shutdown [reason]`", value="Flushes state and terminates the bot cleanly.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}setup_channels`", value="Non-destructively provisions missing blueprint channels & categories.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}setup_roles`", value="Provisions missing staff, ping, cosmetic, and tier level roles.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}setup_birthdays`", value="Deploys the interactive Birthday Registration panel in `birthdays`.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}setup_tickets`", value="Deploys the persistent Support & Staff Application panel in `🎫・tickets`.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}colours`", value="Deploys the cosmetic color selection panel in `🎨・colours`.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}setup_confession_panel`", value="Deploys the anonymous confession box in `🚦confession-🖇️`.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}setup_notifications`", value="Deploys optional community notification role buttons.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}refresh_rules`", value="Refreshes guidelines in `#🛡️・team-rules` and command list in `#team-news`.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}refresh_commands`", value="Refreshes this complete master manual in `#💼・bot-commands`.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}backup_all`", value="Generates and overwrites the single unified master backup snapshot.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}restore_all`", value="Restores channels, permissions, XP, birthdays, and confessions.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}maintenance [on/off/status]`", value="Locks or unlocks non-administrative commands for maintenance.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}shutdown [reason]`", value="Flushes state, saves master backup, and terminates cleanly.", inline=False)
 
     try:
         await cmd_channel.send(embed=header_embed)
-        await cmd_channel.send(embed=public_embed)
+        await cmd_channel.send(embed=member_embed)
+        await cmd_channel.send(embed=mod_embed)
+        await cmd_channel.send(embed=xp_embed)
         await cmd_channel.send(embed=admin_embed)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[Bot Commands Deploy Error]: {e}")
 
 
 async def deploy_tickets_panel(guild: discord.Guild):
@@ -1818,6 +1942,7 @@ class ArkBot(commands.Bot):
         self.add_view(ColourSelectionView())
         self.add_view(NotificationRolesView())
         self.add_view(ConfessionPanelView())
+        self.add_view(BirthdayPanelView())
 
         asyncio.create_task(self._auto_restore_all_guilds())
 
@@ -2012,6 +2137,7 @@ async def on_ready():
         await deploy_tickets_panel(guild)
         await deploy_colours_panel(guild)
         await deploy_confession_panel(guild)
+        await deploy_birthday_panel(guild)
 
         if test_ch:
             embed = discord.Embed(
@@ -2032,7 +2158,7 @@ async def on_ready():
             if team_news_ch:
                 embed = discord.Embed(
                     title="🚀 Arkbot Operational — Full Engine Online!",
-                    description="Leveling, master auto-backups, bump trackers, and moderation engines are online.",
+                    description="Leveling, master auto-backups, bump trackers, birthday reminders, and moderation engines online.",
                     color=discord.Color.green(),
                     timestamp=discord.utils.utcnow(),
                 )
@@ -2389,39 +2515,75 @@ async def hourly_backup_task():
 
 @tasks.loop(hours=1.0)
 async def birthday_announcer_task():
+    """Checks for today's birthdays and announces advance reminders for tomorrow."""
     await bot.wait_until_ready()
-    global ANNOUNCED_BIRTHDAYS_TODAY
+    global ANNOUNCED_BIRTHDAYS_TODAY, REMINDED_BIRTHDAYS_TOMORROW
 
     now = datetime.datetime.now(datetime.timezone.utc)
     today_str = now.strftime("%d/%m")
+    tomorrow = now + datetime.timedelta(days=1)
+    tomorrow_str = tomorrow.strftime("%d/%m")
 
-    if now.hour == 0 and len(ANNOUNCED_BIRTHDAYS_TODAY) > 0:
-        ANNOUNCED_BIRTHDAYS_TODAY.clear()
+    # Reset day tracking at midnight
+    if now.hour == 0:
+        if ANNOUNCED_BIRTHDAYS_TODAY:
+            ANNOUNCED_BIRTHDAYS_TODAY.clear()
+        if REMINDED_BIRTHDAYS_TOMORROW:
+            REMINDED_BIRTHDAYS_TOMORROW.clear()
         await persist_runtime_state()
 
     birthdays = await load_birthdays()
+
     for guild in bot.guilds:
         bday_ch = discord.utils.get(guild.text_channels, name="birthdays")
         if not bday_ch:
             continue
 
         for uid_str, bdate in birthdays.items():
-            if bdate == today_str and int(uid_str) not in ANNOUNCED_BIRTHDAYS_TODAY:
-                member = guild.get_member(int(uid_str))
-                if member:
-                    embed = discord.Embed(
-                        title="🎂 HAPPY BIRTHDAY! 🎉",
-                        description=f"Happy Birthday {member.mention}! Sending warmest wishes from Chill-Verse!",
-                        color=discord.Color.gold(),
-                        timestamp=discord.utils.utcnow(),
-                    )
-                    embed.set_thumbnail(url=member.display_avatar.url)
-                    try:
-                        await bday_ch.send(content=f"🎉 Wish {member.mention} a Happy Birthday today!", embed=embed)
-                        ANNOUNCED_BIRTHDAYS_TODAY.append(member.id)
-                        await persist_runtime_state()
-                    except Exception:
-                        pass
+            uid = int(uid_str)
+            member = guild.get_member(uid)
+            if not member:
+                continue
+
+            # 1. Celebrate Today's Birthday
+            if bdate == today_str and uid not in ANNOUNCED_BIRTHDAYS_TODAY:
+                embed = discord.Embed(
+                    title="🎂 HAPPY BIRTHDAY! 🎉",
+                    description=(
+                        f"Today is a very special day! Happy Birthday {member.mention}!\n\n"
+                        f"Wishing you happiness, good health, and an amazing year ahead from all of us at **Chill-Verse**! 💖"
+                    ),
+                    color=discord.Color.gold(),
+                    timestamp=discord.utils.utcnow(),
+                )
+                embed.set_thumbnail(url=member.display_avatar.url)
+                embed.set_footer(text="Chill-Verse Daily Birthday Celebration")
+                try:
+                    await bday_ch.send(content=f"🎉 Wish {member.mention} a Happy Birthday today! 🥳", embed=embed)
+                    ANNOUNCED_BIRTHDAYS_TODAY.append(uid)
+                    await persist_runtime_state()
+                except Exception:
+                    pass
+
+            # 2. 24-Hour Advance Birthday Reminder Alert
+            elif bdate == tomorrow_str and uid not in REMINDED_BIRTHDAYS_TOMORROW and now.hour >= 12:
+                reminder_embed = discord.Embed(
+                    title="⏰ UPCOMING BIRTHDAY ALERT! 🎂",
+                    description=(
+                        f"Heads up everyone! Tomorrow is **{member.mention}**'s birthday (`{tomorrow_str}`)!\n\n"
+                        f"Get your wishes ready to celebrate with them tomorrow! 🎈"
+                    ),
+                    color=discord.Color.from_rgb(255, 182, 193),
+                    timestamp=discord.utils.utcnow(),
+                )
+                reminder_embed.set_thumbnail(url=member.display_avatar.url)
+                reminder_embed.set_footer(text="Chill-Verse 24-Hour Birthday Alert")
+                try:
+                    await bday_ch.send(embed=reminder_embed)
+                    REMINDED_BIRTHDAYS_TOMORROW.append(uid)
+                    await persist_runtime_state()
+                except Exception:
+                    pass
 
 
 # ==============================================================================
@@ -2588,6 +2750,64 @@ async def check_xp(ctx: commands.Context, member: Optional[discord.Member] = Non
     await ctx.send(embed=embed)
 
 
+# --- Birthday Reminder & Schedule Command ---
+@bot.command(name="birthdays", aliases=["upcoming_birthdays", "upcoming_bdays", "bdayremind"])
+async def upcoming_birthdays_cmd(ctx: commands.Context):
+    """Displays registered community birthdays and upcoming dates."""
+    bdays = await load_birthdays()
+    if not bdays:
+        return await ctx.send("🎂 No birthdays are currently registered. Click the button in `#birthdays` to add yours!", delete_after=6)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    today_date = datetime.date(now.year, now.month, now.day)
+
+    upcoming_list = []
+    for uid_str, bdate in bdays.items():
+        try:
+            d, m = map(int, bdate.split("/"))
+            member = ctx.guild.get_member(int(uid_str))
+            if not member:
+                continue
+
+            bday_this_year = datetime.date(now.year, m, d)
+            if bday_this_year < today_date:
+                bday_next = datetime.date(now.year + 1, m, d)
+            else:
+                bday_next = bday_this_year
+
+            days_left = (bday_next - today_date).days
+            upcoming_list.append((days_left, member, bdate))
+        except Exception:
+            continue
+
+    upcoming_list.sort(key=lambda x: x[0])
+    top_upcoming = upcoming_list[:12]
+
+    if not top_upcoming:
+        return await ctx.send("🎂 No upcoming birthdays found among current server members.", delete_after=6)
+
+    embed = discord.Embed(
+        title="🎂 Upcoming Chill-Verse Birthdays",
+        description="Here are the upcoming member birthdays recorded in the sanctuary:",
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow(),
+    )
+
+    lines = []
+    for days_left, member, bdate in top_upcoming:
+        if days_left == 0:
+            status = "🎉 **TODAY!**"
+        elif days_left == 1:
+            status = "⏳ **Tomorrow!**"
+        else:
+            status = f"in **{days_left} days**"
+        lines.append(f"• {member.mention} — `{bdate}` ({status})")
+
+    embed.description = "\n".join(lines)
+    embed.set_footer(text="Register or update your date anytime in #birthdays!")
+    await ctx.send(embed=embed)
+
+
 # --- Manual XP Suite (Add, Remove, Set) ---
 @bot.command(name="addxp", aliases=["givexp", "add-xp"])
 @is_authority_holder()
@@ -2677,6 +2897,72 @@ async def setxp(ctx: commands.Context, member: discord.Member, amount: int):
     await ctx.send(embed=embed)
 
 
+# --- Manual Drop Spawners (Super Drop & Regular Drop) ---
+@bot.command(name="superdrop", aliases=["spawndrop", "dropsuper"])
+@is_authority_holder()
+async def manual_super_drop(ctx: commands.Context, amount: Optional[int] = None, channel: Optional[discord.TextChannel] = None):
+    """Spawns an interactive Super XP Drop manually into a designated or current room."""
+    target_ch = channel or ctx.channel
+    super_xp = amount if (amount and amount > 0) else random.randint(1000, 5000)
+
+    super_embed = discord.Embed(
+        title="🚨 🔥 SUPER XP DROP INCOMING! 🔥 🚨",
+        description=(
+            f"An authorized administrator has summoned a **SUPER DROP**!\n\n"
+            f"🎁 **Reward:** `+{super_xp:,} XP`\n\n"
+            f"**Click below immediately to claim it!** *(Disappears in 3 minutes)*"
+        ),
+        color=discord.Color.from_rgb(255, 69, 0),
+        timestamp=discord.utils.utcnow(),
+    )
+    super_embed.set_footer(text=f"Summoned by {ctx.author.display_name} • Chill-Verse")
+
+    view = SuperXPDropView(xp_amount=super_xp)
+    try:
+        sent_drop = await target_ch.send(embed=super_embed, view=view)
+        view.message = sent_drop
+        if target_ch.id != ctx.channel.id:
+            await ctx.send(f"✅ Super Drop of `{super_xp:,} XP` spawned in {target_ch.mention}!", delete_after=5)
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            pass
+    except discord.HTTPException as e:
+        await ctx.send(f"⚠️ Failed to spawn Super Drop: {e}", delete_after=6)
+
+
+@bot.command(name="xpdrop", aliases=["dropxp"])
+@is_authority_holder()
+async def manual_xp_drop(ctx: commands.Context, amount: Optional[int] = None, channel: Optional[discord.TextChannel] = None):
+    """Spawns a standard wild XP drop manually."""
+    target_ch = channel or ctx.channel
+    drop_xp = amount if (amount and amount > 0) else random.randint(50, 150)
+
+    embed = discord.Embed(
+        title="🎁 A WILD XP DROP APPEARED!",
+        description=(
+            f"Quick! Be the first member to click the button below to claim **+{drop_xp:,} XP**!\n\n"
+            f"*(Disappears in 5 minutes if unclaimed)*"
+        ),
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.set_footer(text=f"Spawned by {ctx.author.display_name} • Chill-Verse")
+
+    view = ClaimXPDropView(xp_amount=drop_xp)
+    try:
+        sent_msg = await target_ch.send(embed=embed, view=view)
+        view.message = sent_msg
+        if target_ch.id != ctx.channel.id:
+            await ctx.send(f"✅ Wild XP Drop of `{drop_xp:,} XP` spawned in {target_ch.mention}!", delete_after=5)
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            pass
+    except discord.HTTPException as e:
+        await ctx.send(f"⚠️ Failed to spawn XP Drop: {e}", delete_after=6)
+
+
 # ==============================================================================
 # CHANNEL ISOLATION & ACCESS CONTROL
 # ==============================================================================
@@ -2753,7 +3039,7 @@ async def announce(ctx: commands.Context, *, raw_content: Optional[str] = None):
     if not raw_content or not raw_content.strip():
         return await ctx.send(
             "⚠️ **Usage:** `.announce [optional #channel] <Title> | <Message> [--everyone/--here]`\n"
-            "**Example:** `.announce 📢 Updates | The new Chat Revive role is now live! --everyone`",
+            "**Example:** `.announce 📢 Updates | The new Puzzle channel is live! --everyone`",
             delete_after=10,
         )
 
@@ -3074,6 +3360,13 @@ async def setup_roles(ctx: commands.Context):
     )
 
 
+@bot.command(name="setup_birthdays", aliases=["deploy_birthdays", "birthday_panel"])
+@commands.has_permissions(administrator=True)
+async def cmd_setup_birthdays(ctx: commands.Context):
+    await deploy_birthday_panel(ctx.guild)
+    await ctx.send("✅ Interactive birthday registration panel deployed to `#birthdays`!", delete_after=5)
+
+
 @bot.command(name="colours", aliases=["colors", "setup_colours"])
 @commands.has_permissions(administrator=True)
 async def cmd_colours(ctx: commands.Context):
@@ -3231,7 +3524,7 @@ async def restore_all(ctx: commands.Context):
 
     stats = await apply_unified_restore(ctx.guild, backup_data)
 
-    # Overwrite the master backup after restoration
+    # Overwrite master backup after restoration
     fresh_payload = await generate_unified_backup_payload(ctx.guild)
     local_path = MASTER_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
     await safe_write_json(local_path, fresh_payload)
