@@ -262,6 +262,7 @@ SERVER_BLUEPRINT: List[Dict[str, Any]] = [
 # ==============================================================================
 FILE_LOCKS: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
+
 def _read_file_sync(path: str, default: Any) -> Any:
     if not os.path.exists(path):
         return default
@@ -270,6 +271,7 @@ def _read_file_sync(path: str, default: Any) -> Any:
             return json.load(f)
     except Exception:
         return default
+
 
 def _write_file_sync(path: str, data: Any) -> None:
     temp_path = f"{path}.tmp"
@@ -285,18 +287,22 @@ def _write_file_sync(path: str, data: Any) -> None:
                 pass
         print(f"[Storage Engine] Failed writing {path}: {e}")
 
+
 async def safe_read_json(path: str, default: Any) -> Any:
     async with FILE_LOCKS[path]:
         return await asyncio.to_thread(_read_file_sync, path, default)
+
 
 async def safe_write_json(path: str, data: Any) -> None:
     async with FILE_LOCKS[path]:
         await asyncio.to_thread(_write_file_sync, path, data)
 
+
 async def init_xp_cache():
     global XP_CACHE, XP_CACHE_DIRTY
     XP_CACHE = await safe_read_json(XP_DATABASE_FILE, {})
     XP_CACHE_DIRTY = False
+
 
 async def flush_xp_cache():
     global XP_CACHE_DIRTY
@@ -304,8 +310,10 @@ async def flush_xp_cache():
         await safe_write_json(XP_DATABASE_FILE, XP_CACHE)
         XP_CACHE_DIRTY = False
 
+
 async def get_user_xp(user_id: int) -> int:
     return XP_CACHE.get(str(user_id), 0)
+
 
 async def add_user_xp(user_id: int, amount: int) -> Tuple[int, int]:
     global XP_CACHE_DIRTY
@@ -314,8 +322,8 @@ async def add_user_xp(user_id: int, amount: int) -> Tuple[int, int]:
     new_xp = prev_xp + amount
     XP_CACHE[uid] = new_xp
     XP_CACHE_DIRTY = True
-    await flush_xp_cache()
     return prev_xp, new_xp
+
 
 async def remove_user_xp(user_id: int, amount: int) -> Tuple[int, int]:
     global XP_CACHE_DIRTY
@@ -324,22 +332,26 @@ async def remove_user_xp(user_id: int, amount: int) -> Tuple[int, int]:
     new_xp = max(0, prev_xp - amount)
     XP_CACHE[uid] = new_xp
     XP_CACHE_DIRTY = True
-    await flush_xp_cache()
     return prev_xp, new_xp
+
 
 def calculate_level(xp: int) -> int:
     if xp <= 0:
         return 0
     return int((xp / 75) ** 0.5)
 
+
 def xp_for_level(level: int) -> int:
     return int(75 * (level**2))
+
 
 async def load_birthdays() -> Dict[str, str]:
     return await safe_read_json(BIRTHDAYS_FILE, {})
 
+
 async def save_birthdays(data: Dict[str, str]) -> None:
     await safe_write_json(BIRTHDAYS_FILE, data)
+
 
 async def get_next_confession_id() -> int:
     data = await safe_read_json(CONFESSIONS_FILE, {"last_id": 0})
@@ -347,6 +359,7 @@ async def get_next_confession_id() -> int:
     data["last_id"] = new_id
     await safe_write_json(CONFESSIONS_FILE, data)
     return new_id
+
 
 async def persist_runtime_state():
     state = {
@@ -362,6 +375,7 @@ async def persist_runtime_state():
         "maintenance_mode": MAINTENANCE_MODE,
     }
     await safe_write_json(STATE_FILE, state)
+
 
 async def restore_runtime_state():
     global LAST_BUMP_TIME, AFK_USERS, ANNOUNCED_BIRTHDAYS_TODAY, MAINTENANCE_MODE
@@ -386,6 +400,7 @@ async def restore_runtime_state():
 
     ANNOUNCED_BIRTHDAYS_TODAY = state.get("announced_birthdays_today", [])
     MAINTENANCE_MODE = state.get("maintenance_mode", False)
+
 
 async def sync_member_level_roles(member: discord.Member, new_xp: int) -> Optional[discord.Role]:
     guild = member.guild
@@ -415,6 +430,7 @@ async def sync_member_level_roles(member: discord.Member, new_xp: int) -> Option
         pass
 
     return target_role
+
 
 async def handle_level_up(
     member: discord.Member,
@@ -454,6 +470,7 @@ async def handle_level_up(
         except (discord.HTTPException, discord.Forbidden):
             pass
 
+
 # ==============================================================================
 # AUTHORITY CHECKS & SYSTEM HELPERS
 # ==============================================================================
@@ -471,6 +488,7 @@ def is_authority_holder():
 
     return commands.check(predicate)
 
+
 def is_purge_authorized():
     async def predicate(ctx: commands.Context):
         if not ctx.guild:
@@ -484,6 +502,7 @@ def is_purge_authorized():
         raise commands.CheckFailure("⛔ **Restricted:** The purge command is strictly reserved for **Supreme Leader**, **Highness**, and **Authority**.")
 
     return commands.check(predicate)
+
 
 def is_team_member(member: Union[discord.Member, discord.User]) -> bool:
     if not isinstance(member, discord.Member):
@@ -502,20 +521,22 @@ def is_team_member(member: Union[discord.Member, discord.User]) -> bool:
     user_roles = {r.name.lower().strip() for r in getattr(member, "roles", [])}
     return bool(team_roles.intersection(user_roles))
 
+
 def resolve_guild_context(interaction: discord.Interaction) -> Optional[discord.Guild]:
     if interaction.guild:
         return interaction.guild
     matched = [g for g in interaction.client.guilds if g.get_member(interaction.user.id)]
     return matched[0] if len(matched) == 1 else None
 
+
 def normalize_name(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "", name).lower()
+
 
 # ==============================================================================
 # STRICT ADMIN AREA PERMISSION ENFORCER (SUPREME LEADER, HIGHNESS, ARKBOT ONLY)
 # ==============================================================================
 async def enforce_admin_area_security(guild: discord.Guild):
-    """Guarantees ONLY Supreme Leader, Highness, and Arkbot have view and send permissions in Admin Area."""
     admin_cat = discord.utils.get(guild.categories, name="Admin Area 🔒")
     if not admin_cat:
         return
@@ -546,7 +567,6 @@ async def enforce_admin_area_security(guild: discord.Guild):
         )
 
     try:
-        # Clear external roles from the category
         for target in list(admin_cat.overwrites.keys()):
             if target not in strict_overwrites:
                 await admin_cat.set_permissions(target, overwrite=None)
@@ -554,7 +574,6 @@ async def enforce_admin_area_security(guild: discord.Guild):
     except Exception as e:
         print(f"[Security Enforcer] Failed setting Admin Area category permissions: {e}")
 
-    # Enforce on all channels inside Admin Area
     for ch in admin_cat.channels:
         try:
             for target in list(ch.overwrites.keys()):
@@ -563,6 +582,7 @@ async def enforce_admin_area_security(guild: discord.Guild):
             await ch.edit(overwrites=strict_overwrites)
         except Exception:
             pass
+
 
 async def get_or_create_audit_channel(guild: discord.Guild) -> discord.TextChannel:
     target_name = "📜・audit-logs"
@@ -596,6 +616,7 @@ async def get_or_create_audit_channel(guild: discord.Guild) -> discord.TextChann
         reason="Private Audit Channel (Supreme Leader, Highness & Arkbot only)",
     )
 
+
 async def get_or_create_testing_channel(guild: discord.Guild) -> discord.TextChannel:
     target_name = "🧪・bot-testing"
     ch = discord.utils.get(guild.text_channels, name=target_name) or discord.utils.get(guild.text_channels, name="bot-testing")
@@ -628,6 +649,7 @@ async def get_or_create_testing_channel(guild: discord.Guild) -> discord.TextCha
         reason="Diagnostics Channel (Supreme Leader, Highness & Arkbot only)",
     )
 
+
 async def get_or_create_memory_channel(guild: discord.Guild) -> discord.TextChannel:
     memory_ch = discord.utils.get(guild.text_channels, name="bot-memory")
     if memory_ch:
@@ -654,6 +676,7 @@ async def get_or_create_memory_channel(guild: discord.Guild) -> discord.TextChan
         reason="Arkbot State Engine (Supreme Leader, Highness & Arkbot only)",
     )
 
+
 async def find_latest_backup_from_discord(guild: discord.Guild) -> Optional[Dict[str, Any]]:
     channels = [
         discord.utils.get(guild.text_channels, name="🩸・bot-errors"),
@@ -676,6 +699,7 @@ async def find_latest_backup_from_discord(guild: discord.Guild) -> Optional[Dict
             print(f"[Backup Search] Failed scanning #{ch.name}: {e}")
     return None
 
+
 async def purge_all_old_backups(channel: discord.TextChannel, keep_count: int = 1):
     try:
         backup_messages = []
@@ -695,6 +719,7 @@ async def purge_all_old_backups(channel: discord.TextChannel, keep_count: int = 
                     pass
     except Exception as e:
         print(f"Failed purging old backups: {e}")
+
 
 # ==============================================================================
 # UNIFIED BACKUP & SAFE RESTORATION
@@ -797,6 +822,7 @@ async def generate_unified_backup_payload(guild: discord.Guild) -> Dict[str, Any
         "user_birthdays": await load_birthdays(),
         "last_bump_time": LAST_BUMP_TIME.timestamp() if LAST_BUMP_TIME else None,
     }
+
 
 async def apply_unified_restore(guild: discord.Guild, data: Dict[str, Any]) -> Dict[str, int]:
     global SERVER_BLUEPRINT, LAST_BUMP_TIME, XP_CACHE, XP_CACHE_DIRTY
@@ -928,6 +954,7 @@ async def apply_unified_restore(guild: discord.Guild, data: Dict[str, Any]) -> D
     await enforce_admin_area_security(guild)
     return stats
 
+
 # ==============================================================================
 # BUMP NOTIFICATION ENGINE
 # ==============================================================================
@@ -937,6 +964,7 @@ def get_bump_role_mentions(guild: discord.Guild) -> str:
         guild.roles,
     )
     return bump_role.mention if bump_role else "@here"
+
 
 async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.TextChannel, initial_delay: int = 0):
     target_channel = discord.utils.get(guild.text_channels, name="⏰・bump") or discord.utils.get(
@@ -987,6 +1015,7 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
     except asyncio.CancelledError:
         pass
 
+
 # ==============================================================================
 # UI COMPONENTS (XP DROPS, CONFESSIONS, COLOURS, NOTIFICATIONS, TICKETS)
 # ==============================================================================
@@ -1025,6 +1054,7 @@ class ClaimXPDropView(View):
         if isinstance(interaction.user, discord.Member):
             await handle_level_up(interaction.user, prev_xp, new_xp, interaction.channel)
 
+
 class SuperXPDropView(View):
     def __init__(self, xp_amount: int):
         super().__init__(timeout=180.0)
@@ -1059,6 +1089,7 @@ class SuperXPDropView(View):
 
         if isinstance(interaction.user, discord.Member):
             await handle_level_up(interaction.user, prev_xp, new_xp, interaction.channel)
+
 
 # --- Anonymous Confessions ---
 class ConfessionModal(Modal, title="Submit Anonymous Confession"):
@@ -1096,7 +1127,6 @@ class ConfessionModal(Modal, title="Submit Anonymous Confession"):
         except discord.HTTPException as e:
             return await interaction.response.send_message(f"⚠️ Failed to deliver confession: {e}", ephemeral=True)
 
-        # Private audit log record for safety and moderation
         audit_ch = await get_or_create_audit_channel(guild)
         if audit_ch:
             log_embed = discord.Embed(
@@ -1113,6 +1143,7 @@ class ConfessionModal(Modal, title="Submit Anonymous Confession"):
 
         await interaction.response.send_message(f"✅ Your confession has been posted anonymously as **#{confession_id}**!", ephemeral=True)
 
+
 class ConfessionPanelView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -1121,7 +1152,8 @@ class ConfessionPanelView(View):
     async def submit_btn(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(ConfessionModal())
 
-# --- Pure Aesthetic Colours (Zero Notifications Attached) ---
+
+# --- Pure Aesthetic Colours ---
 class ColourSelectionView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -1189,7 +1221,8 @@ class ColourSelectionView(View):
         await member.remove_roles(*current_colors, reason="Cleared colour roles")
         await interaction.response.send_message("⚪ All color roles have been removed.", ephemeral=True)
 
-# --- Dedicated Notification Roles View ---
+
+# --- Notification Preferences ---
 class NotificationRolesView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -1221,6 +1254,7 @@ class NotificationRolesView(View):
     @discord.ui.button(label="💬 Chat Revive", style=discord.ButtonStyle.primary, custom_id="ping_revive")
     async def revive_ping(self, interaction: discord.Interaction, button: Button):
         await self.toggle_ping(interaction, "Chat Revive")
+
 
 # --- Verification & Tickets ---
 class VerificationModal(Modal, title="Server Verification Form"):
@@ -1277,6 +1311,7 @@ class VerificationModal(Modal, title="Server Verification Form"):
 
         await interaction.response.send_message("Verification complete! Welcome to Chill-Verse.", ephemeral=True)
 
+
 class TeamApplicationModal(Modal, title="Staff Team Application"):
     age_tz = TextInput(label="Age & Timezone", placeholder="18, EST", required=True, max_length=50)
     experience = TextInput(
@@ -1320,6 +1355,7 @@ class TeamApplicationModal(Modal, title="Staff Team Application"):
 
         await interaction.response.send_message("✅ Your application has been submitted for review!", ephemeral=True)
 
+
 class RulesView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -1342,6 +1378,7 @@ class RulesView(View):
         except discord.HTTPException as e:
             await interaction.response.send_message(f"Error handling kick: {e}", ephemeral=True)
 
+
 class CloseTicketView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -1354,6 +1391,7 @@ class CloseTicketView(View):
             await interaction.channel.delete(reason="Ticket closed by user.")
         except (discord.HTTPException, discord.NotFound):
             pass
+
 
 class TicketView(View):
     def __init__(self):
@@ -1414,8 +1452,9 @@ class TicketView(View):
     async def apply_team(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(TeamApplicationModal())
 
+
 # ==============================================================================
-# PANELS DEPLOYERS (RULES IN TEAM RULES & COMMANDS IN TEAM NEWS)
+# PANELS DEPLOYERS
 # ==============================================================================
 async def deploy_confession_panel(guild: discord.Guild):
     confession_ch = discord.utils.get(guild.text_channels, name="🚦confession-🖇️") or discord.utils.get(
@@ -1448,6 +1487,7 @@ async def deploy_confession_panel(guild: discord.Guild):
     except discord.HTTPException as e:
         print(f"[Panel Deploy] Failed deploying confession box: {e}")
 
+
 async def deploy_colours_panel(guild: discord.Guild):
     ch = discord.utils.get(guild.text_channels, name="🎨・colours") or discord.utils.get(guild.text_channels, name="colours")
     if not ch:
@@ -1476,6 +1516,7 @@ async def deploy_colours_panel(guild: discord.Guild):
     except discord.HTTPException as e:
         print(f"[Colour Deploy Error]: {e}")
 
+
 async def deploy_notifications_panel(guild: discord.Guild, target_channel: Optional[discord.TextChannel] = None):
     ch = target_channel or discord.utils.get(guild.text_channels, name="📢・announcements")
     if not ch:
@@ -1491,8 +1532,8 @@ async def deploy_notifications_panel(guild: discord.Guild, target_channel: Optio
     except Exception:
         pass
 
+
 async def deploy_team_rules_panel(guild: discord.Guild):
-    """Posts ONLY the server and team rules in 🛡️・team-rules."""
     team_rules_ch = discord.utils.get(guild.text_channels, name="🛡️・team-rules") or discord.utils.get(
         guild.text_channels, name="team-rules"
     )
@@ -1551,8 +1592,8 @@ async def deploy_team_rules_panel(guild: discord.Guild):
     except Exception:
         pass
 
+
 async def deploy_team_news_commands_panel(guild: discord.Guild, prefix: str = "."):
-    """Posts the specific bot commands for Authority and lower ranks in team-news."""
     team_news_ch = discord.utils.get(guild.text_channels, name="team-news")
     if not team_news_ch:
         return
@@ -1618,6 +1659,7 @@ async def deploy_team_news_commands_panel(guild: discord.Guild, prefix: str = ".
     except Exception as e:
         print(f"[Team News Deploy Error]: {e}")
 
+
 async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     cmd_channel = discord.utils.get(guild.text_channels, name="💼・bot-commands") or discord.utils.get(
         guild.text_channels, name="bot-commands"
@@ -1677,6 +1719,7 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     except Exception:
         pass
 
+
 async def deploy_tickets_panel(guild: discord.Guild):
     ch = discord.utils.get(guild.text_channels, name="🎫・tickets")
     if not ch:
@@ -1697,6 +1740,7 @@ async def deploy_tickets_panel(guild: discord.Guild):
         await ch.send(embed=embed, view=TicketView())
     except Exception:
         pass
+
 
 # ==============================================================================
 # SUBCLASSED BOT ENGINE
@@ -1765,7 +1809,6 @@ class ArkBot(commands.Bot):
                     if member:
                         await sync_member_level_roles(member, xp_val)
 
-            # Strictly enforce Admin Area role restrictions
             await enforce_admin_area_security(guild)
 
         self.restore_complete.set()
@@ -1785,6 +1828,7 @@ class ArkBot(commands.Bot):
         await flush_xp_cache()
         await persist_runtime_state()
         await super().close()
+
 
 bot = ArkBot()
 
@@ -1811,6 +1855,7 @@ async def check_maintenance_mode(ctx: commands.Context):
     await ctx.send("🛠️ **Maintenance Mode Active:** Non-administrative commands are temporarily disabled.", delete_after=6)
     return False
 
+
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} — Chill-Verse operational.")
@@ -1826,7 +1871,6 @@ async def on_ready():
         test_ch = await get_or_create_testing_channel(guild)
         await get_or_create_audit_channel(guild)
 
-        # 1. Ensure all channels from blueprint
         created_channels = 0
         existing_cats = {normalize_name(cat.name): cat for cat in guild.categories}
         for cat_data in SERVER_BLUEPRINT:
@@ -1856,7 +1900,6 @@ async def on_ready():
                     await guild.create_text_channel(name=ch_name, category=category)
                 created_channels += 1
 
-        # 2. Provision server roles
         created_roles = 0
         existing_roles = {r.name.lower().strip() for r in guild.roles}
         roles_to_deploy = [
@@ -1892,10 +1935,7 @@ async def on_ready():
                 except Exception:
                     pass
 
-        # 3. Lock down Admin Area strictly to Supreme Leader, Highness & Arkbot
         await enforce_admin_area_security(guild)
-
-        # 4. Deploy panels: Rules in team-rules & Commands in team-news
         await deploy_team_rules_panel(guild)
         await deploy_team_news_commands_panel(guild, bot.command_prefix)
         await deploy_bot_commands_panel(guild, bot.command_prefix)
@@ -1903,7 +1943,6 @@ async def on_ready():
         await deploy_colours_panel(guild)
         await deploy_confession_panel(guild)
 
-        # 5. Startup Self-Test & Diagnostics
         if test_ch:
             embed = discord.Embed(
                 title="🧪 Arkbot Startup Self-Test & Diagnostic Report",
@@ -1930,7 +1969,6 @@ async def on_ready():
             )
             await test_ch.send(embed=embed)
 
-        # 6. Snapshot backup
         err_channel = discord.utils.get(guild.text_channels, name="🩸・bot-errors")
         if err_channel:
             payload = await generate_unified_backup_payload(guild)
@@ -1962,6 +2000,7 @@ async def on_ready():
                     pass
         UPDATE_NOTIFIED = True
 
+
 @bot.event
 async def on_message_delete(message: discord.Message):
     if message.author.bot or not message.guild:
@@ -1987,6 +2026,7 @@ async def on_message_delete(message: discord.Message):
             await log_ch.send(embed=embed)
         except (discord.HTTPException, discord.Forbidden):
             pass
+
 
 @bot.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
@@ -2019,6 +2059,7 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
         except (discord.HTTPException, discord.Forbidden):
             pass
 
+
 @bot.event
 async def on_member_remove(member: discord.Member):
     log_ch = await get_or_create_audit_channel(member.guild)
@@ -2033,6 +2074,7 @@ async def on_member_remove(member: discord.Member):
             await log_ch.send(embed=embed)
         except discord.HTTPException:
             pass
+
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: Exception):
@@ -2078,6 +2120,7 @@ async def on_command_error(ctx: commands.Context, error: Exception):
             except discord.HTTPException:
                 pass
 
+
 @bot.event
 async def on_member_join(member: discord.Member):
     embed = discord.Embed(
@@ -2107,6 +2150,7 @@ async def on_member_join(member: discord.Member):
             else f"{member.mention} (Please enable DMs or click Accept below to verify!)"
         )
         await channel.send(content=msg, embed=embed, view=RulesView())
+
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -2154,6 +2198,7 @@ async def on_message(message: discord.Message):
 
         recent = [t for t in queue if now - t < 4.0]
         if len(recent) > 5:
+            queue.clear()
             try:
                 await message.delete()
             except discord.HTTPException:
@@ -2208,12 +2253,14 @@ async def on_message(message: discord.Message):
 
     await bot.process_commands(message)
 
+
 # ==============================================================================
 # AUTOMATED TASKS
 # ==============================================================================
 @tasks.loop(seconds=60.0)
 async def xp_flush_task():
     await flush_xp_cache()
+
 
 @tasks.loop(hours=2.0)
 async def xp_drop_task():
@@ -2260,6 +2307,7 @@ async def xp_drop_task():
         except discord.HTTPException:
             pass
 
+
 @tasks.loop(hours=1.0)
 async def hourly_backup_task():
     await bot.wait_until_ready()
@@ -2281,6 +2329,7 @@ async def hourly_backup_task():
             await purge_all_old_backups(backup_channel, keep_count=1)
         except Exception:
             pass
+
 
 @tasks.loop(hours=1.0)
 async def birthday_announcer_task():
@@ -2318,6 +2367,7 @@ async def birthday_announcer_task():
                     except Exception:
                         pass
 
+
 # ==============================================================================
 # GENERAL & ADMINISTRATIVE COMMANDS
 # ==============================================================================
@@ -2325,6 +2375,7 @@ async def birthday_announcer_task():
 async def ping(ctx: commands.Context):
     latency = round(bot.latency * 1000)
     await ctx.send(f"🏓 **Pong!** Latency: `{latency}ms`")
+
 
 @bot.command(name="bump")
 async def bump(ctx: commands.Context):
@@ -2400,6 +2451,7 @@ async def bump(ctx: commands.Context):
     target_channel = bump_channel or ctx.channel
     BUMP_TIMER_TASK = asyncio.create_task(schedule_bump_timers(ctx.guild, target_channel))
 
+
 @bot.command(name="revive", aliases=["chatrevive"])
 @commands.guild_only()
 async def chat_revive(ctx: commands.Context, *, topic: Optional[str] = None):
@@ -2447,6 +2499,7 @@ async def chat_revive(ctx: commands.Context, *, topic: Optional[str] = None):
     except (discord.Forbidden, discord.NotFound, discord.HTTPException):
         pass
 
+
 @bot.command(name="xp", aliases=["rank", "level"])
 async def check_xp(ctx: commands.Context, member: Optional[discord.Member] = None):
     target = member or ctx.author
@@ -2478,6 +2531,7 @@ async def check_xp(ctx: commands.Context, member: Optional[discord.Member] = Non
 
     await ctx.send(embed=embed)
 
+
 @bot.command(name="addxp", aliases=["givexp"])
 @is_authority_holder()
 async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
@@ -2506,6 +2560,7 @@ async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text=f"Granted by {ctx.author.display_name}")
     await ctx.send(embed=embed)
+
 
 @bot.command(name="removexp", aliases=["takexp", "delxp"])
 @is_authority_holder()
@@ -2536,6 +2591,7 @@ async def removexp(ctx: commands.Context, member: discord.Member, amount: int):
     embed.set_footer(text=f"Deducted by {ctx.author.display_name}")
     await ctx.send(embed=embed)
 
+
 # ==============================================================================
 # CHANNEL ISOLATION & ACCESS CONTROL
 # ==============================================================================
@@ -2546,12 +2602,14 @@ async def lock_channel(ctx: commands.Context, channel: Optional[discord.TextChan
     await target.set_permissions(ctx.guild.default_role, send_messages=False, reason=f"Locked by {ctx.author}")
     await ctx.send(f"🔒 {target.mention} has been locked for standard members.")
 
+
 @bot.command(name="unlock")
 @is_authority_holder()
 async def unlock_channel(ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
     target = channel or ctx.channel
     await target.set_permissions(ctx.guild.default_role, send_messages=True, reason=f"Unlocked by {ctx.author}")
     await ctx.send(f"🔓 {target.mention} has been unlocked.")
+
 
 @bot.command(name="hide")
 @is_authority_holder()
@@ -2560,12 +2618,14 @@ async def hide_channel(ctx: commands.Context, channel: Optional[discord.TextChan
     await target.set_permissions(ctx.guild.default_role, view_channel=False, reason=f"Hidden by {ctx.author}")
     await ctx.send(f"👁️‍🗨️ {target.mention} is now hidden from standard members.")
 
+
 @bot.command(name="show")
 @is_authority_holder()
 async def show_channel(ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
     target = channel or ctx.channel
     await target.set_permissions(ctx.guild.default_role, view_channel=True, reason=f"Unhidden by {ctx.author}")
     await ctx.send(f"👁️ {target.mention} is now visible to standard members.")
+
 
 @bot.command(name="permit")
 @is_authority_holder()
@@ -2578,11 +2638,13 @@ async def permit(ctx: commands.Context, target: Union[discord.Member, discord.Ro
     )
     await ctx.send(f"✅ Whitelisted {target.mention} in {ctx.channel.mention}.")
 
+
 @bot.command(name="revoke")
 @is_authority_holder()
 async def revoke(ctx: commands.Context, target: Union[discord.Member, discord.Role]):
     await ctx.channel.set_permissions(target, overwrite=None, reason=f"Revoked by {ctx.author}")
     await ctx.send(f"🚫 Cleared specific overrides for {target.mention} in this channel.")
+
 
 @bot.command(name="remove_bot_role")
 @is_authority_holder()
@@ -2599,6 +2661,7 @@ async def remove_bot_role(ctx: commands.Context, target: Union[discord.Role, dis
 
     await ctx.send("⚠️ Pass a valid `@role`, `@bot`, or `all`.")
 
+
 @bot.command(name="announce")
 @is_authority_holder()
 async def announce(ctx: commands.Context, *, raw_content: Optional[str] = None):
@@ -2610,8 +2673,8 @@ async def announce(ctx: commands.Context, *, raw_content: Optional[str] = None):
         )
 
     content = raw_content.strip()
-
     target_channel = None
+
     if ctx.message.channel_mentions:
         first_mention = ctx.message.channel_mentions[0]
         if content.startswith(first_mention.mention):
@@ -2678,6 +2741,7 @@ async def announce(ctx: commands.Context, *, raw_content: Optional[str] = None):
     except discord.HTTPException as e:
         await ctx.send(f"⚠️ Failed to send announcement: `{e}`", delete_after=8)
 
+
 @bot.command(name="purge")
 @is_purge_authorized()
 async def purge(ctx: commands.Context, amount: int = 10, target: Optional[Union[discord.Member, str]] = None):
@@ -2730,6 +2794,7 @@ async def purge(ctx: commands.Context, amount: int = 10, target: Optional[Union[
     target_desc = f"from {target.mention}" if isinstance(target, discord.Member) else (f"matching `{target}`" if target else "")
     await ctx.send(f"🧹 Cleared **{deleted_total}** message(s) {target_desc}.", delete_after=4)
 
+
 # ==============================================================================
 # BLUEPRINT, PANELS & SYSTEM MANAGEMENT
 # ==============================================================================
@@ -2770,7 +2835,6 @@ async def setup_channels(ctx: commands.Context):
                 skipped_channels += 1
                 continue
 
-            # Strict isolation for Admin Area
             if raw_cat_name == "Admin Area 🔒":
                 overwrites = {
                     guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -2859,6 +2923,7 @@ async def setup_channels(ctx: commands.Context):
     )
     await status_msg.edit(content=None, embed=embed)
 
+
 @bot.command(name="setup_roles")
 @commands.has_permissions(administrator=True)
 async def setup_roles(ctx: commands.Context):
@@ -2923,11 +2988,13 @@ async def setup_roles(ctx: commands.Context):
         content=f"✅ **Role Sync Complete:** Created **{created_count}** missing role(s). Preserved **{skipped_count}** existing role(s)."
     )
 
+
 @bot.command(name="colours", aliases=["colors", "setup_colours"])
 @commands.has_permissions(administrator=True)
 async def cmd_colours(ctx: commands.Context):
     await deploy_colours_panel(ctx.guild)
     await ctx.send("✅ Cosmetic colours panel deployed to `#🎨・colours` (Zero notifications attached)!", delete_after=5)
+
 
 @bot.command(name="setup_confession_panel")
 @commands.has_permissions(administrator=True)
@@ -2935,17 +3002,20 @@ async def cmd_setup_confession(ctx: commands.Context):
     await deploy_confession_panel(ctx.guild)
     await ctx.send("✅ Anonymous confession panel deployed to `#🚦confession-🖇️`!", delete_after=5)
 
+
 @bot.command(name="setup_notifications", aliases=["setup_pings"])
 @commands.has_permissions(administrator=True)
 async def cmd_notifications(ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
     await deploy_notifications_panel(ctx.guild, channel or ctx.channel)
     await ctx.send("✅ Notification panel deployed!", delete_after=5)
 
+
 @bot.command(name="setup_tickets")
 @commands.has_permissions(administrator=True)
 async def setup_tickets(ctx: commands.Context):
     await deploy_tickets_panel(ctx.guild)
     await ctx.send("✅ Support & Application panel deployed to `🎫・tickets`!", delete_after=5)
+
 
 @bot.command(name="refresh_rules")
 @commands.has_permissions(administrator=True)
@@ -2954,11 +3024,13 @@ async def refresh_rules(ctx: commands.Context):
     await deploy_team_news_commands_panel(ctx.guild, bot.command_prefix)
     await ctx.send("✅ **Team rules updated in `🛡️・team-rules` and command directory posted in `team-news`!**", delete_after=5)
 
+
 @bot.command(name="refresh_commands", aliases=["refresh_bot_commands"])
 @commands.has_permissions(administrator=True)
 async def refresh_commands(ctx: commands.Context):
     await deploy_bot_commands_panel(ctx.guild, bot.command_prefix)
     await ctx.send("✅ **Master bot command manual refreshed in `💼・bot-commands`!**", delete_after=5)
+
 
 @bot.command(name="afk")
 async def afk(ctx: commands.Context, *, reason: Optional[str] = None):
@@ -2978,6 +3050,7 @@ async def afk(ctx: commands.Context, *, reason: Optional[str] = None):
         await ctx.message.delete()
     except (discord.Forbidden, discord.NotFound, discord.HTTPException):
         pass
+
 
 @bot.command(name="backup_all")
 @commands.has_permissions(administrator=True)
@@ -3013,6 +3086,7 @@ async def backup_all(ctx: commands.Context):
             file=discord.File(file_stream, filename=f"manual_backup_{ctx.guild.id}.json"),
         )
         await purge_all_old_backups(err_channel, keep_count=1)
+
 
 @bot.command(name="restore_all")
 @commands.has_permissions(administrator=True)
@@ -3082,6 +3156,7 @@ async def restore_all(ctx: commands.Context):
     )
     await status_msg.edit(content=None, embed=embed)
 
+
 @bot.command(name="maintenance")
 @commands.has_permissions(administrator=True)
 async def maintenance_toggle(ctx: commands.Context, state: Optional[str] = None):
@@ -3106,6 +3181,7 @@ async def maintenance_toggle(ctx: commands.Context, state: Optional[str] = None)
         timestamp=discord.utils.utcnow(),
     )
     await ctx.send(embed=embed)
+
 
 @bot.command(name="shutdown")
 @commands.has_permissions(administrator=True)
@@ -3181,6 +3257,7 @@ async def shutdown(ctx: commands.Context, *, reason: str = "Scheduled system mai
     await asyncio.sleep(1.0)
     await bot.close()
     sys.exit(0)
+
 
 # ==============================================================================
 # RUN BOT
