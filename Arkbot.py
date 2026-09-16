@@ -740,6 +740,83 @@ async def purge_all_old_backups(channel: discord.TextChannel):
 
 
 # ==============================================================================
+# AUTO-CLEAN BOT NOTIFICATIONS & ALERTS ENGINE
+# ==============================================================================
+async def clear_all_bot_notifications(guild: discord.Guild):
+    """
+    Clears all stale bot notifications, bump countdowns, error logs, and testing spam
+    from channels across the server so everything starts fresh.
+    """
+    full_wipe_channels = [
+        "team-news",
+        "⏰・bump",
+        "bump",
+        "🧪・bot-testing",
+        "bot-testing",
+        "💼・bot-commands",
+        "bot-commands",
+        "🛡️・team-rules",
+        "team-rules",
+        "server-rules",
+        "🎨・colours",
+        "colours",
+        "🎫・tickets",
+        "tickets",
+    ]
+
+    for ch_name in full_wipe_channels:
+        ch = discord.utils.get(guild.text_channels, name=ch_name)
+        if ch:
+            try:
+                await ch.purge(limit=100, check=lambda m: m.author == guild.me)
+                await asyncio.sleep(0.2)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+    # Selective cleanup for channels with user content:
+    # 1. In #🚦confession-🖇️, only wipe previous Confession Box panel embeds
+    confession_ch = discord.utils.get(guild.text_channels, name="🚦confession-🖇️") or discord.utils.get(
+        guild.text_channels, name="confessions"
+    )
+    if confession_ch:
+        try:
+            async for msg in confession_ch.history(limit=50):
+                if msg.author == guild.me and msg.embeds:
+                    if "Confession Box" in (msg.embeds[0].title or ""):
+                        await msg.delete()
+                        await asyncio.sleep(0.2)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    # 2. In #birthdays, wipe old birthday registration panels and old reminder alerts
+    bday_ch = discord.utils.get(guild.text_channels, name="birthdays")
+    if bday_ch:
+        try:
+            async for msg in bday_ch.history(limit=50):
+                if msg.author == guild.me and msg.embeds:
+                    title = msg.embeds[0].title or ""
+                    if any(kw in title for kw in ["Birthday Calendar & Registration", "UPCOMING BIRTHDAY ALERT", "HAPPY BIRTHDAY"]):
+                        await msg.delete()
+                        await asyncio.sleep(0.2)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    # 3. In #📢・announcements, remove old Notification Preferences panels
+    announcement_ch = discord.utils.get(guild.text_channels, name="📢・announcements") or discord.utils.get(
+        guild.text_channels, name="announcements"
+    )
+    if announcement_ch:
+        try:
+            async for msg in announcement_ch.history(limit=50):
+                if msg.author == guild.me and msg.embeds:
+                    if "Community Notification Preferences" in (msg.embeds[0].title or ""):
+                        await msg.delete()
+                        await asyncio.sleep(0.2)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+
+# ==============================================================================
 # UNIFIED SINGLE BACKUP & RESTORATION ENGINE
 # ==============================================================================
 async def generate_unified_backup_payload(guild: discord.Guild) -> Dict[str, Any]:
@@ -1067,7 +1144,6 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
 # UI COMPONENTS (XP DROPS WITH AUTO-DISAPPEAR, CONFESSIONS, COLOURS, TICKETS, BDAY)
 # ==============================================================================
 async def _schedule_message_deletion(message: Optional[discord.Message], delay: float = 7.0):
-    """Helper to cleanly delete a message after a brief delay."""
     if not message:
         return
     await asyncio.sleep(delay)
@@ -1079,13 +1155,12 @@ async def _schedule_message_deletion(message: Optional[discord.Message], delay: 
 
 class ClaimXPDropView(View):
     def __init__(self, xp_amount: int):
-        super().__init__(timeout=300.0)  # 5 Minutes timeout
+        super().__init__(timeout=300.0)
         self.xp_amount = xp_amount
         self.claimed = False
         self.message: Optional[discord.Message] = None
 
     async def on_timeout(self):
-        # Auto-disappear if left unclaimed
         if not self.claimed and self.message:
             try:
                 await self.message.delete()
@@ -1118,7 +1193,6 @@ class ClaimXPDropView(View):
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         await interaction.response.edit_message(embed=embed, view=self)
 
-        # Disappear 7 seconds after claim
         target_msg = self.message or interaction.message
         asyncio.create_task(_schedule_message_deletion(target_msg, delay=7.0))
 
@@ -1128,13 +1202,12 @@ class ClaimXPDropView(View):
 
 class SuperXPDropView(View):
     def __init__(self, xp_amount: int):
-        super().__init__(timeout=180.0)  # 3 Minutes timeout
+        super().__init__(timeout=180.0)
         self.xp_amount = xp_amount
         self.claimed = False
         self.message: Optional[discord.Message] = None
 
     async def on_timeout(self):
-        # Auto-disappear if left unclaimed
         if not self.claimed and self.message:
             try:
                 await self.message.delete()
@@ -1167,7 +1240,6 @@ class SuperXPDropView(View):
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         await interaction.response.edit_message(embed=embed, view=self)
 
-        # Disappear 7 seconds after claim
         target_msg = self.message or interaction.message
         asyncio.create_task(_schedule_message_deletion(target_msg, delay=7.0))
 
@@ -1588,6 +1660,41 @@ class TicketView(View):
 # ==============================================================================
 # PANEL DEPLOYERS
 # ==============================================================================
+async def deploy_rules_panel(guild: discord.Guild):
+    ch = discord.utils.get(guild.text_channels, name="server-rules")
+    if not ch:
+        return
+
+    try:
+        async for msg in ch.history(limit=25):
+            if msg.author == guild.me and msg.embeds and "Official Server Rules" in (msg.embeds[0].title or ""):
+                return
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title="📜 Official Server Rules & Member Verification",
+        description=(
+            "Welcome to **Chill-Verse**! Please read our guidelines carefully:\n\n"
+            "**1.** Be respectful, kind, and supportive to everyone.\n"
+            "**2.** No discrimination, harassment, hate speech, or toxicity.\n"
+            "**3.** Keep all chat conversations and media teen-friendly.\n"
+            "**4.** No spam, self-promotion, or unsolicited server invites.\n"
+            "**5.** Comply with Discord's Terms of Service at all times.\n\n"
+            "👉 Click **Accept** below to submit your verification details and unlock the server, or **Decline** to leave."
+        ),
+        color=discord.Color.purple(),
+    )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text="Chill-Verse Rules & Verification • Click Below to Begin")
+
+    try:
+        await ch.send(embed=embed, view=RulesView())
+    except discord.HTTPException as e:
+        print(f"[Rules Panel Deploy Error]: {e}")
+
+
 async def deploy_birthday_panel(guild: discord.Guild):
     bday_ch = discord.utils.get(guild.text_channels, name="birthdays")
     if not bday_ch:
@@ -1686,6 +1793,13 @@ async def deploy_notifications_panel(guild: discord.Guild, target_channel: Optio
     ch = target_channel or discord.utils.get(guild.text_channels, name="📢・announcements")
     if not ch:
         return
+
+    try:
+        async for msg in ch.history(limit=25):
+            if msg.author == guild.me and msg.embeds and "Community Notification Preferences" in (msg.embeds[0].title or ""):
+                return
+    except Exception:
+        pass
 
     embed = discord.Embed(
         title="🔔 Community Notification Preferences",
@@ -1829,7 +1943,6 @@ async def deploy_team_news_commands_panel(guild: discord.Guild, prefix: str = ".
 
 
 async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
-    """Deploys a complete, categorized breakdown of EVERY single bot command."""
     cmd_channel = discord.utils.get(guild.text_channels, name="💼・bot-commands") or discord.utils.get(
         guild.text_channels, name="bot-commands"
     )
@@ -1901,6 +2014,8 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
         description="System recovery suite restricted to **Supreme Leader** & **Highness**:",
         color=discord.Color.red(),
     )
+    admin_embed.add_field(name=f"`{prefix}clean_start`", value="**Auto-clears all stale bot notifications, warnings, and alerts across the server.**", inline=False)
+    admin_embed.add_field(name=f"`{prefix}deploy_panels`", value="Runs and deploys ALL server UI panels across every designated channel.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_channels`", value="Non-destructively provisions missing blueprint channels & categories.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_roles`", value="Provisions missing staff, ping, cosmetic, and tier level roles.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_birthdays`", value="Deploys the interactive Birthday Registration panel in `birthdays`.", inline=False)
@@ -1945,6 +2060,19 @@ async def deploy_tickets_panel(guild: discord.Guild):
         await ch.send(embed=embed, view=TicketView())
     except Exception:
         pass
+
+
+async def deploy_all_system_panels(guild: discord.Guild, prefix: str = "."):
+    """Runs and deploys every interface panel across the server in sequence."""
+    await deploy_rules_panel(guild)
+    await deploy_team_rules_panel(guild)
+    await deploy_team_news_commands_panel(guild, prefix)
+    await deploy_bot_commands_panel(guild, prefix)
+    await deploy_tickets_panel(guild)
+    await deploy_colours_panel(guild)
+    await deploy_confession_panel(guild)
+    await deploy_birthday_panel(guild)
+    await deploy_notifications_panel(guild)
 
 
 # ==============================================================================
@@ -1992,117 +2120,7 @@ class ArkBot(commands.Bot):
         if not xp_flush_task.is_running():
             xp_flush_task.start()
 
-    async def _auto_restore_all_guilds(self):
-        """Restores first from the single master backup, then immediately overwrites it with a fresh snapshot."""
-        await self.wait_until_ready()
-        global BUMP_TIMER_TASK
-
-        try:
-            for guild in self.guilds:
-                backup_file = MASTER_BACKUP_TEMPLATE.format(guild_id=guild.id)
-                boot_backup = await safe_read_json(backup_file, None)
-
-                # If local master file doesn't exist, search Discord for latest
-                if not boot_backup or not boot_backup.get("categories"):
-                    remote_backup = await find_latest_backup_from_discord(guild)
-                    if remote_backup:
-                        boot_backup = remote_backup
-
-                # Step 1: Restore first if backup exists
-                if boot_backup:
-                    stats = await apply_unified_restore(guild, boot_backup)
-                    print(
-                        f"[Auto-Boot] Restored {stats['channels_created']} channels, "
-                        f"{stats['xp_users']} XP profiles, {stats['birthdays']} birthdays, "
-                        f"{stats['confessions']} confessions in {guild.name}."
-                    )
-                else:
-                    for uid_str, xp_val in XP_CACHE.items():
-                        member = guild.get_member(int(uid_str))
-                        if member:
-                            await sync_member_level_roles(member, xp_val)
-
-                # Step 2: Overwrite existing backup with fresh snapshot
-                fresh_payload = await generate_unified_backup_payload(guild)
-                await safe_write_json(backup_file, fresh_payload)
-
-                err_channel = discord.utils.get(guild.text_channels, name="🩸・bot-errors") or discord.utils.get(
-                    guild.text_channels, name="bot-errors"
-                )
-                if err_channel:
-                    await purge_all_old_backups(err_channel)
-                    file_stream = io.BytesIO(json.dumps(fresh_payload, indent=4).encode("utf-8"))
-                    backup_file_attachment = discord.File(file_stream, filename=f"master_backup_{guild.id}.json")
-                    await err_channel.send(
-                        content="🔒 **Master Single Backup Snapshot (Overwritten on Boot)**",
-                        file=backup_file_attachment,
-                    )
-
-                await enforce_admin_area_security(guild)
-        except Exception as e:
-            print(f"[Auto-Boot Critical Error]: {e}")
-            traceback.print_exc()
-        finally:
-            self.restore_complete.set()
-
-        if LAST_BUMP_TIME:
-            elapsed = (datetime.datetime.now(datetime.timezone.utc) - LAST_BUMP_TIME).total_seconds()
-            if elapsed < BUMP_COOLDOWN_SECONDS and self.guilds:
-                target_g = self.guilds[0]
-                target_ch = discord.utils.get(target_g.text_channels, name="⏰・bump")
-                if target_ch:
-                    BUMP_TIMER_TASK = asyncio.create_task(
-                        schedule_bump_timers(target_g, target_ch, initial_delay=int(elapsed))
-                    )
-
-    async def close(self):
-        print("[Shutdown Engine] Flushing state and XP cache to disk...")
-        await flush_xp_cache()
-        await persist_runtime_state()
-        await super().close()
-
-
-bot = ArkBot()
-
-# ==============================================================================
-# AUDIT LOGGING & EVENTS
-# ==============================================================================
-@bot.check
-async def check_maintenance_mode(ctx: commands.Context):
-    if not MAINTENANCE_MODE:
-        return True
-
-    if ctx.command and ctx.command.name in ["maintenance", "shutdown"]:
-        return True
-
-    is_owner = ctx.guild and ctx.author.id == ctx.guild.owner_id
-    is_admin = getattr(getattr(ctx.author, "guild_permissions", None), "administrator", False)
-    staff_roles = {"supreme leader", "highness", "authority"}
-    user_roles = {r.name.lower().strip() for r in getattr(ctx.author, "roles", [])}
-    is_high_command = bool(staff_roles.intersection(user_roles))
-
-    if is_owner or is_admin or is_high_command:
-        return True
-
-    await ctx.send("🛠️ **Maintenance Mode Active:** Non-administrative commands are temporarily disabled.", delete_after=6)
-    return False
-
-
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user} — Chill-Verse operational.")
-    global UPDATE_NOTIFIED
-
-    await bot.restore_complete.wait()
-
-    if bot.first_run_completed:
-        return
-    bot.first_run_completed = True
-
-    for guild in bot.guilds:
-        test_ch = await get_or_create_testing_channel(guild)
-        await get_or_create_audit_channel(guild)
-
+    async def _provision_blueprint_and_roles(self, guild: discord.Guild) -> Tuple[int, int]:
         created_channels = 0
         existing_cats = {normalize_name(cat.name): cat for cat in guild.categories}
         for cat_data in SERVER_BLUEPRINT:
@@ -2167,26 +2185,139 @@ async def on_ready():
                 except Exception:
                     pass
 
-        await enforce_admin_area_security(guild)
-        await deploy_team_rules_panel(guild)
-        await deploy_team_news_commands_panel(guild, bot.command_prefix)
-        await deploy_bot_commands_panel(guild, bot.command_prefix)
-        await deploy_tickets_panel(guild)
-        await deploy_colours_panel(guild)
-        await deploy_confession_panel(guild)
-        await deploy_birthday_panel(guild)
+        return created_channels, created_roles
+
+    async def _auto_restore_all_guilds(self):
+        """Restores first, clears old bot alerts for clean start, deploys all panels, and overwrites backup."""
+        await self.wait_until_ready()
+        global BUMP_TIMER_TASK
+
+        try:
+            for guild in self.guilds:
+                backup_file = MASTER_BACKUP_TEMPLATE.format(guild_id=guild.id)
+                boot_backup = await safe_read_json(backup_file, None)
+
+                if not boot_backup or not boot_backup.get("categories"):
+                    remote_backup = await find_latest_backup_from_discord(guild)
+                    if remote_backup:
+                        boot_backup = remote_backup
+
+                # Step 1: Restore system from backup
+                if boot_backup:
+                    stats = await apply_unified_restore(guild, boot_backup)
+                    print(
+                        f"[Auto-Boot] Restored {stats['channels_created']} channels, "
+                        f"{stats['xp_users']} XP profiles, {stats['birthdays']} birthdays, "
+                        f"{stats['confessions']} confessions in {guild.name}."
+                    )
+                else:
+                    for uid_str, xp_val in XP_CACHE.items():
+                        member = guild.get_member(int(uid_str))
+                        if member:
+                            await sync_member_level_roles(member, xp_val)
+
+                # Step 2: Ensure any missing blueprint channels/roles are present
+                await self._provision_blueprint_and_roles(guild)
+
+                # Step 3: AUTO CLEAR ALL BOT NOTIFICATIONS & STALE ALERTS FOR CLEAN START
+                await clear_all_bot_notifications(guild)
+
+                # Step 4: Deploy all clean system panels
+                await deploy_all_system_panels(guild, self.command_prefix)
+
+                # Step 5: Enforce strict Admin Area permissions
+                await enforce_admin_area_security(guild)
+
+                # Step 6: Overwrite existing backup with fresh snapshot
+                fresh_payload = await generate_unified_backup_payload(guild)
+                await safe_write_json(backup_file, fresh_payload)
+
+                err_channel = discord.utils.get(guild.text_channels, name="🩸・bot-errors") or discord.utils.get(
+                    guild.text_channels, name="bot-errors"
+                )
+                if err_channel:
+                    await purge_all_old_backups(err_channel)
+                    file_stream = io.BytesIO(json.dumps(fresh_payload, indent=4).encode("utf-8"))
+                    backup_file_attachment = discord.File(file_stream, filename=f"master_backup_{guild.id}.json")
+                    await err_channel.send(
+                        content="🔒 **Master Single Backup Snapshot (Clean Start & Panels Deployed)**",
+                        file=backup_file_attachment,
+                    )
+
+        except Exception as e:
+            print(f"[Auto-Boot Critical Error]: {e}")
+            traceback.print_exc()
+        finally:
+            self.restore_complete.set()
+
+        if LAST_BUMP_TIME:
+            elapsed = (datetime.datetime.now(datetime.timezone.utc) - LAST_BUMP_TIME).total_seconds()
+            if elapsed < BUMP_COOLDOWN_SECONDS and self.guilds:
+                target_g = self.guilds[0]
+                target_ch = discord.utils.get(target_g.text_channels, name="⏰・bump")
+                if target_ch:
+                    BUMP_TIMER_TASK = asyncio.create_task(
+                        schedule_bump_timers(target_g, target_ch, initial_delay=int(elapsed))
+                    )
+
+    async def close(self):
+        print("[Shutdown Engine] Flushing state and XP cache to disk...")
+        await flush_xp_cache()
+        await persist_runtime_state()
+        await super().close()
+
+
+bot = ArkBot()
+
+# ==============================================================================
+# AUDIT LOGGING & EVENTS
+# ==============================================================================
+@bot.check
+async def check_maintenance_mode(ctx: commands.Context):
+    if not MAINTENANCE_MODE:
+        return True
+
+    if ctx.command and ctx.command.name in ["maintenance", "shutdown"]:
+        return True
+
+    is_owner = ctx.guild and ctx.author.id == ctx.guild.owner_id
+    is_admin = getattr(getattr(ctx.author, "guild_permissions", None), "administrator", False)
+    staff_roles = {"supreme leader", "highness", "authority"}
+    user_roles = {r.name.lower().strip() for r in getattr(ctx.author, "roles", [])}
+    is_high_command = bool(staff_roles.intersection(user_roles))
+
+    if is_owner or is_admin or is_high_command:
+        return True
+
+    await ctx.send("🛠️ **Maintenance Mode Active:** Non-administrative commands are temporarily disabled.", delete_after=6)
+    return False
+
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user} — Chill-Verse operational.")
+    global UPDATE_NOTIFIED
+
+    await bot.restore_complete.wait()
+
+    if bot.first_run_completed:
+        return
+    bot.first_run_completed = True
+
+    for guild in bot.guilds:
+        test_ch = await get_or_create_testing_channel(guild)
+        await get_or_create_audit_channel(guild)
 
         if test_ch:
             embed = discord.Embed(
                 title="🧪 Arkbot Startup Diagnostic Report",
-                description="Startup synchronization complete across all operational nodes.",
+                description="Clean start active. Stale notifications purged and all panels verified.",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow(),
             )
             embed.add_field(name="Gateway Latency", value=f"`{round(bot.latency * 1000)}ms`", inline=True)
-            embed.add_field(name="Channels Provisioned", value=f"`+{created_channels} created`", inline=True)
-            embed.add_field(name="Roles Provisioned", value=f"`+{created_roles} created`", inline=True)
-            embed.add_field(name="XP Profiles", value=f"`{len(XP_CACHE)} loaded`", inline=True)
+            embed.add_field(name="Active XP Profiles", value=f"`{len(XP_CACHE)} loaded`", inline=True)
+            embed.add_field(name="Status", value="`Clean Start & Panels Deployed`", inline=True)
             await test_ch.send(embed=embed)
 
     if not UPDATE_NOTIFIED:
@@ -2195,7 +2326,7 @@ async def on_ready():
             if team_news_ch:
                 embed = discord.Embed(
                     title="🚀 Arkbot Operational — Full Engine Online!",
-                    description="Leveling, master auto-backups, bump trackers, birthday reminders, and moderation engines online.",
+                    description="Clean start executed. Master auto-backups, bump trackers, birthday reminders, and all panels online.",
                     color=discord.Color.green(),
                     timestamp=discord.utils.utcnow(),
                 )
@@ -2561,7 +2692,6 @@ async def birthday_announcer_task():
     tomorrow = now + datetime.timedelta(days=1)
     tomorrow_str = tomorrow.strftime("%d/%m")
 
-    # Reset day tracking at midnight
     if now.hour == 0:
         if ANNOUNCED_BIRTHDAYS_TODAY:
             ANNOUNCED_BIRTHDAYS_TODAY.clear()
@@ -3206,111 +3336,31 @@ async def purge(ctx: commands.Context, amount: int = 10, target: Optional[Union[
 # ==============================================================================
 # BLUEPRINT, PANELS & MASTER BACKUP CONTROLS
 # ==============================================================================
+@bot.command(name="clean_start", aliases=["clear_notifications", "clear_notifs", "clearnotifications"])
+@commands.has_permissions(administrator=True)
+async def cmd_clean_start(ctx: commands.Context):
+    """Purges all previous bot notifications, alerts, and panels, then re-deploys fresh panels."""
+    status_msg = await ctx.send("🧹 **Executing Clean Start: Purging all previous bot notifications, alerts, and stale panels...**")
+    await clear_all_bot_notifications(ctx.guild)
+    await deploy_all_system_panels(ctx.guild, bot.command_prefix)
+    await status_msg.edit(content="✨ **Clean Start Complete! All stale bot notifications wiped and fresh panels deployed.**")
+
+
+@bot.command(name="deploy_panels", aliases=["setup_all_panels", "run_all_panels"])
+@commands.has_permissions(administrator=True)
+async def cmd_deploy_all_panels(ctx: commands.Context):
+    """Manually deploys every UI panel across the server in designated channels."""
+    status_msg = await ctx.send("🔄 **Deploying all system panels across the server...**")
+    await deploy_all_system_panels(ctx.guild, bot.command_prefix)
+    await status_msg.edit(content="✅ **All system panels have been successfully deployed and verified!**")
+
+
 @bot.command(name="setup_channels")
 @commands.has_permissions(administrator=True)
 async def setup_channels(ctx: commands.Context):
     guild = ctx.guild
     status_msg = await ctx.send("🔍 **Analyzing live structure to guarantee zero duplicates or overwrites...**")
-
-    existing_categories = {normalize_name(cat.name): cat for cat in guild.categories}
-    created_cats = 0
-    created_channels = 0
-    skipped_channels = 0
-
-    for cat_data in SERVER_BLUEPRINT:
-        raw_cat_name = cat_data["category"]
-        norm_cat_name = normalize_name(raw_cat_name)
-
-        if norm_cat_name in existing_categories:
-            category = existing_categories[norm_cat_name]
-        else:
-            category = await guild.create_category(name=raw_cat_name, reason="Non-Destructive Blueprint Provisioning")
-            existing_categories[norm_cat_name] = category
-            created_cats += 1
-            await asyncio.sleep(0.4)
-
-        existing_channels_in_cat = {normalize_name(ch.name): ch for ch in category.channels}
-
-        for ch_info in cat_data["channels"]:
-            raw_ch_name = ch_info["name"]
-            norm_ch_name = normalize_name(raw_ch_name)
-            ch_type = ch_info["type"]
-            is_restricted = ch_info.get("restricted", False)
-            is_read_only = ch_info.get("read_only", False)
-            user_lim = ch_info.get("user_limit", 0)
-
-            if norm_ch_name in existing_channels_in_cat:
-                skipped_channels += 1
-                continue
-
-            if raw_cat_name == "Admin Area 🔒":
-                overwrites = {
-                    guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                    guild.me: discord.PermissionOverwrite(
-                        view_channel=True, send_messages=True, read_message_history=True, manage_channels=True
-                    ),
-                }
-                for rname in ["Supreme Leader", "Highness"]:
-                    r = discord.utils.get(guild.roles, name=rname)
-                    if r:
-                        overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-            else:
-                overwrites = {
-                    guild.default_role: discord.PermissionOverwrite(
-                        view_channel=False if is_restricted else True,
-                        send_messages=False if (is_restricted or is_read_only) else True,
-                        add_reactions=True,
-                        read_message_history=True,
-                    ),
-                    guild.me: discord.PermissionOverwrite(
-                        view_channel=True, send_messages=True, read_message_history=True, manage_channels=True
-                    ),
-                }
-                admin_roles = ["Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator", "Trial Mod", "Chill-Verse Team"]
-                for rname in admin_roles:
-                    r = discord.utils.get(guild.roles, name=rname)
-                    if r:
-                        overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-
-            try:
-                if ch_type == "text":
-                    new_ch = await guild.create_text_channel(
-                        name=raw_ch_name,
-                        category=category,
-                        overwrites=overwrites,
-                        reason="Non-Destructive Missing Channel Creation",
-                    )
-                elif ch_type == "voice":
-                    new_ch = await guild.create_voice_channel(
-                        name=raw_ch_name,
-                        category=category,
-                        user_limit=user_lim,
-                        overwrites=overwrites,
-                        reason="Non-Destructive Missing Channel Creation",
-                    )
-                elif ch_type == "forum":
-                    try:
-                        new_ch = await guild.create_forum_channel(
-                            name=raw_ch_name,
-                            category=category,
-                            overwrites=overwrites,
-                            reason="Non-Destructive Missing Channel Creation",
-                        )
-                    except (discord.HTTPException, AttributeError):
-                        new_ch = await guild.create_text_channel(
-                            name=raw_ch_name,
-                            category=category,
-                            overwrites=overwrites,
-                            reason="Non-Destructive Missing Channel Creation (Forum Fallback)",
-                        )
-
-                existing_channels_in_cat[norm_ch_name] = new_ch
-                created_channels += 1
-                await asyncio.sleep(0.4)
-
-            except discord.HTTPException as e:
-                print(f"Failed to create channel {raw_ch_name}: {e}")
-
+    created_channels, _ = await bot._provision_blueprint_and_roles(guild)
     await get_or_create_memory_channel(guild)
     await get_or_create_audit_channel(guild)
     await get_or_create_testing_channel(guild)
@@ -3320,9 +3370,7 @@ async def setup_channels(ctx: commands.Context):
         title="✅ Server Blueprint Checked & Synced",
         description=(
             f"**Safe Provisioning Complete:**\n\n"
-            f"• **New Categories Created:** `{created_cats}`\n"
             f"• **New Channels Created:** `{created_channels}`\n"
-            f"• **Existing Channels Preserved (Skipped):** `{skipped_channels}`\n"
             f"• **Admin Area Security:** Strictly Supreme Leader, Highness & Arkbot only\n\n"
             f"*Zero existing channels or configurations were modified, overwritten, or duplicated.*"
         ),
@@ -3337,63 +3385,9 @@ async def setup_channels(ctx: commands.Context):
 async def setup_roles(ctx: commands.Context):
     guild = ctx.guild
     status_msg = await ctx.send("⚙️ **Checking server roles... Skips existing to prevent duplicates/overwrites.**")
-
-    base_perms = discord.Permissions(send_messages=True, read_messages=True, connect=True, speak=True)
-
-    roles_to_create = [
-        {"name": "Supreme Leader", "perms": discord.Permissions(administrator=True), "color": discord.Color.dark_red(), "hoist": True, "mentionable": True},
-        {"name": "Highness", "perms": discord.Permissions(administrator=True), "color": discord.Color.gold(), "hoist": True, "mentionable": True},
-        {"name": "Authority", "perms": discord.Permissions(ban_members=True, kick_members=True, manage_channels=True, manage_roles=True), "color": discord.Color.orange(), "hoist": True, "mentionable": True},
-        {"name": "Head Moderator", "perms": discord.Permissions(ban_members=True, kick_members=True, moderate_members=True, manage_messages=True), "color": discord.Color.red(), "hoist": True, "mentionable": True},
-        {"name": "Moderator", "perms": discord.Permissions(kick_members=True, moderate_members=True, manage_messages=True), "color": discord.Color.yellow(), "hoist": True, "mentionable": True},
-        {"name": "Trial Mod", "perms": discord.Permissions(moderate_members=True, manage_messages=True), "color": discord.Color.blue(), "hoist": True, "mentionable": True},
-        {"name": "Chill-Verse Team", "perms": discord.Permissions(view_channel=True, send_messages=True, read_message_history=True), "color": discord.Color(0x313338), "hoist": True, "mentionable": False},
-        {"name": "Chat Revive", "perms": discord.Permissions.none(), "color": discord.Color.from_rgb(26, 188, 156), "hoist": False, "mentionable": True},
-        {"name": "Sovereign (Levels 60-70)", "perms": base_perms, "color": discord.Color.purple(), "hoist": True, "mentionable": False},
-        {"name": "Legend (Levels 50-59)", "perms": base_perms, "color": discord.Color.dark_purple(), "hoist": False, "mentionable": False},
-        {"name": "Champion (Levels 40-49)", "perms": base_perms, "color": discord.Color(0xED4245), "hoist": False, "mentionable": False},
-        {"name": "Elite (Levels 30-39)", "perms": base_perms, "color": discord.Color.dark_green(), "hoist": False, "mentionable": False},
-        {"name": "Vanguard (Levels 20-29)", "perms": base_perms, "color": discord.Color.green(), "hoist": False, "mentionable": False},
-        {"name": "Explorer (Levels 10-19)", "perms": base_perms, "color": discord.Color.teal(), "hoist": False, "mentionable": False},
-        {"name": "Newbie (Levels 1-9)", "perms": base_perms, "color": discord.Color.light_grey(), "hoist": False, "mentionable": False},
-        {"name": "Member", "perms": base_perms, "color": discord.Color.default(), "hoist": False, "mentionable": False},
-        {"name": "Bump Pings", "perms": discord.Permissions.none(), "color": discord.Color.purple(), "hoist": False, "mentionable": True},
-        {"name": "Poll Pings", "perms": discord.Permissions.none(), "color": discord.Color.default(), "hoist": False, "mentionable": True},
-        {"name": "Red", "perms": discord.Permissions.none(), "color": discord.Color.from_rgb(255, 0, 0), "hoist": False, "mentionable": False},
-        {"name": "Yellow", "perms": discord.Permissions.none(), "color": discord.Color.from_rgb(255, 255, 0), "hoist": False, "mentionable": False},
-        {"name": "Green", "perms": discord.Permissions.none(), "color": discord.Color.from_rgb(0, 128, 0), "hoist": False, "mentionable": False},
-        {"name": "Blue", "perms": discord.Permissions.none(), "color": discord.Color.from_rgb(0, 0, 255), "hoist": False, "mentionable": False},
-        {"name": "Orange", "perms": discord.Permissions.none(), "color": discord.Color.from_rgb(255, 165, 0), "hoist": False, "mentionable": False},
-        {"name": "Pink", "perms": discord.Permissions.none(), "color": discord.Color.from_rgb(255, 105, 180), "hoist": False, "mentionable": False},
-    ]
-
-    existing_role_names = {r.name.lower().strip() for r in guild.roles}
-    created_count = 0
-    skipped_count = 0
-
-    for role_data in roles_to_create:
-        r_name_clean = role_data["name"].lower().strip()
-        if r_name_clean in existing_role_names:
-            skipped_count += 1
-            continue
-
-        try:
-            await guild.create_role(
-                name=role_data["name"],
-                permissions=role_data["perms"],
-                color=role_data["color"],
-                hoist=role_data["hoist"],
-                mentionable=role_data.get("mentionable", False),
-                reason="Non-Destructive Role Provisioning",
-            )
-            existing_role_names.add(r_name_clean)
-            created_count += 1
-            await asyncio.sleep(0.5)
-        except Exception as e:
-            print(f"Failed to create role {role_data['name']}: {e}")
-
+    _, created_roles = await bot._provision_blueprint_and_roles(guild)
     await status_msg.edit(
-        content=f"✅ **Role Sync Complete:** Created **{created_count}** missing role(s). Preserved **{skipped_count}** existing role(s)."
+        content=f"✅ **Role Sync Complete:** Created **{created_roles}** missing role(s). Preserved all existing role(s)."
     )
 
 
@@ -3511,7 +3505,7 @@ async def backup_all(ctx: commands.Context):
 @bot.command(name="restore_all")
 @commands.has_permissions(administrator=True)
 async def restore_all(ctx: commands.Context):
-    """Restores from the single master backup and overwrites the backup point."""
+    """Restores from the single master backup, auto-cleans old notifications, deploys all panels, and overwrites the backup."""
     status_msg = await ctx.send("🔄 **Scanning for single master backup source...**")
     backup_data = None
     source_description = ""
@@ -3561,6 +3555,15 @@ async def restore_all(ctx: commands.Context):
 
     stats = await apply_unified_restore(ctx.guild, backup_data)
 
+    # Re-provision missing blueprint channels & roles
+    await bot._provision_blueprint_and_roles(ctx.guild)
+
+    # Clean previous bot messages & alerts
+    await clear_all_bot_notifications(ctx.guild)
+
+    # Deploy all panels post-restore
+    await deploy_all_system_panels(ctx.guild, bot.command_prefix)
+
     # Overwrite master backup after restoration
     fresh_payload = await generate_unified_backup_payload(ctx.guild)
     local_path = MASTER_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
@@ -3573,20 +3576,20 @@ async def restore_all(ctx: commands.Context):
         await purge_all_old_backups(err_channel)
         file_stream = io.BytesIO(json.dumps(fresh_payload, indent=4).encode("utf-8"))
         await err_channel.send(
-            content="🔒 **Master System Backup (Overwritten Post-Restore)**",
+            content="🔒 **Master System Backup (Overwritten Post-Restore & Clean Start)**",
             file=discord.File(file_stream, filename=f"master_backup_{ctx.guild.id}.json"),
         )
 
     embed = discord.Embed(
-        title="✅ System Restored & Master Backup Overwritten",
+        title="✅ System Restored & Clean Start Completed",
         description=(
             f"Restoration from **{source_description}** complete:\n\n"
             f"• **Missing Channels Rebuilt:** `{stats['channels_created']}`\n"
             f"• **Missing Permissions Applied:** `{stats['perms_applied']}`\n"
-            f"• **Existing Overwrites Preserved (Skipped):** `{stats['perms_skipped']}`\n"
             f"• **User XP Profiles Synchronized:** `{stats['xp_users']}`\n"
             f"• **Birthdays Restored:** `{stats['birthdays']}`\n"
             f"• **Confessions Restored:** `{stats['confessions']}`\n"
+            f"• **Clean Start:** Stale alerts purged & fresh UI panels deployed\n"
             f"• **Admin Area Security:** Strictly Supreme Leader, Highness & Arkbot only\n\n"
             f"*The single master backup has been overwritten with current verified server state.*"
         ),
