@@ -156,7 +156,7 @@ REVIVE_ICEBREAKERS = [
 ]
 
 # ==============================================================================
-# SERVER BLUEPRINT
+# SERVER BLUEPRINT (INCLUDES NICKNAMES & PUZZLES)
 # ==============================================================================
 SERVER_BLUEPRINT: List[Dict[str, Any]] = [
     {
@@ -165,6 +165,7 @@ SERVER_BLUEPRINT: List[Dict[str, Any]] = [
             {"name": "📢・announcements", "type": "text", "restricted": False, "read_only": True},
             {"name": "server-rules", "type": "text", "restricted": False, "read_only": True},
             {"name": "👋・welcome", "type": "text", "restricted": False},
+            {"name": "🏷️・change-nickname", "type": "text", "restricted": False, "read_only": True},
         ],
     },
     {
@@ -743,10 +744,7 @@ async def purge_all_old_backups(channel: discord.TextChannel):
 # AUTO-CLEAN BOT NOTIFICATIONS & ALERTS ENGINE
 # ==============================================================================
 async def clear_all_bot_notifications(guild: discord.Guild):
-    """
-    Clears all stale bot notifications, bump countdowns, error logs, and testing spam
-    from channels across the server so everything starts fresh.
-    """
+    """Clears all stale bot messages and alerts across control channels for a clean start."""
     full_wipe_channels = [
         "team-news",
         "⏰・bump",
@@ -762,6 +760,8 @@ async def clear_all_bot_notifications(guild: discord.Guild):
         "colours",
         "🎫・tickets",
         "tickets",
+        "🏷️・change-nickname",
+        "change-nickname",
     ]
 
     for ch_name in full_wipe_channels:
@@ -773,8 +773,7 @@ async def clear_all_bot_notifications(guild: discord.Guild):
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-    # Selective cleanup for channels with user content:
-    # 1. In #🚦confession-🖇️, only wipe previous Confession Box panel embeds
+    # Selective cleanup for user channels:
     confession_ch = discord.utils.get(guild.text_channels, name="🚦confession-🖇️") or discord.utils.get(
         guild.text_channels, name="confessions"
     )
@@ -788,7 +787,6 @@ async def clear_all_bot_notifications(guild: discord.Guild):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
-    # 2. In #birthdays, wipe old birthday registration panels and old reminder alerts
     bday_ch = discord.utils.get(guild.text_channels, name="birthdays")
     if bday_ch:
         try:
@@ -801,7 +799,6 @@ async def clear_all_bot_notifications(guild: discord.Guild):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
-    # 3. In #📢・announcements, remove old Notification Preferences panels
     announcement_ch = discord.utils.get(guild.text_channels, name="📢・announcements") or discord.utils.get(
         guild.text_channels, name="announcements"
     )
@@ -1141,7 +1138,7 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
 
 
 # ==============================================================================
-# UI COMPONENTS (XP DROPS WITH AUTO-DISAPPEAR, CONFESSIONS, COLOURS, TICKETS, BDAY)
+# UI COMPONENTS (NICKNAMES, XP DROPS, CONFESSIONS, COLOURS, TICKETS, BDAY)
 # ==============================================================================
 async def _schedule_message_deletion(message: Optional[discord.Message], delay: float = 7.0):
     if not message:
@@ -1151,6 +1148,85 @@ async def _schedule_message_deletion(message: Optional[discord.Message], delay: 
         await message.delete()
     except (discord.NotFound, discord.HTTPException):
         pass
+
+
+# --- Level 11+ Nickname Modal & Panel ---
+class NicknameModal(Modal, title="Update Server Nickname"):
+    new_nick = TextInput(
+        label="New Server Nickname",
+        placeholder="Enter your new nickname (max 32 characters)...",
+        required=True,
+        max_length=32,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        member = interaction.user if isinstance(interaction.user, discord.Member) else interaction.guild.get_member(interaction.user.id)
+        if not member:
+            return await interaction.response.send_message("⚠️ Failed to resolve member profile.", ephemeral=True)
+
+        if member.id == interaction.guild.owner_id:
+            return await interaction.response.send_message("⚠️ Discord prevents bots from changing the server owner's nickname.", ephemeral=True)
+
+        if member.top_role >= interaction.guild.me.top_role:
+            return await interaction.response.send_message(
+                "⚠️ My bot role is lower than or equal to yours in the server hierarchy, so Discord prevents me from editing your nickname.",
+                ephemeral=True,
+            )
+
+        new_name = self.new_nick.value.strip()
+        try:
+            old_name = member.display_name
+            await member.edit(nick=new_name, reason="Self-service nickname changer (Level 11+)")
+            await interaction.response.send_message(f"✅ Your server nickname has been updated from **{old_name}** to **{new_name}**!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("⚠️ Missing permissions to modify your nickname.", ephemeral=True)
+        except discord.HTTPException as e:
+            await interaction.response.send_message(f"⚠️ Discord error: {e}", ephemeral=True)
+
+
+class NicknamePanelView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🏷️ Change Nickname", style=discord.ButtonStyle.primary, custom_id="persistent_change_nickname")
+    async def change_nick_btn(self, interaction: discord.Interaction, button: Button):
+        user_xp = await get_user_xp(interaction.user.id)
+        lvl = calculate_level(user_xp)
+        is_admin = getattr(getattr(interaction.user, "guild_permissions", None), "administrator", False)
+
+        if lvl < 11 and not is_admin:
+            return await interaction.response.send_message(
+                f"⛔ **Level 11+ Required!**\n"
+                f"You are currently **Level {lvl}**.\n"
+                f"Keep chatting and bumping to unlock custom nicknames at Level 11!",
+                ephemeral=True,
+            )
+
+        await interaction.response.send_modal(NicknameModal())
+
+    @discord.ui.button(label="🔄 Reset to Default", style=discord.ButtonStyle.secondary, custom_id="persistent_reset_nickname")
+    async def reset_nick_btn(self, interaction: discord.Interaction, button: Button):
+        user_xp = await get_user_xp(interaction.user.id)
+        lvl = calculate_level(user_xp)
+        is_admin = getattr(getattr(interaction.user, "guild_permissions", None), "administrator", False)
+
+        if lvl < 11 and not is_admin:
+            return await interaction.response.send_message(
+                f"⛔ **Level 11+ Required!** You are currently **Level {lvl}**.", ephemeral=True
+            )
+
+        member = interaction.user if isinstance(interaction.user, discord.Member) else interaction.guild.get_member(interaction.user.id)
+        if not member:
+            return await interaction.response.send_message("⚠️ Member identity could not be resolved.", ephemeral=True)
+
+        if member.id == interaction.guild.owner_id or member.top_role >= interaction.guild.me.top_role:
+            return await interaction.response.send_message("⚠️ Cannot reset your nickname due to Discord role hierarchy restrictions.", ephemeral=True)
+
+        try:
+            await member.edit(nick=None, reason="Nickname reset to default")
+            await interaction.response.send_message("✅ Your nickname has been reset back to your original username!", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"⚠️ Failed to reset nickname: {e}", ephemeral=True)
 
 
 class ClaimXPDropView(View):
@@ -1660,6 +1736,41 @@ class TicketView(View):
 # ==============================================================================
 # PANEL DEPLOYERS
 # ==============================================================================
+async def deploy_nickname_panel(guild: discord.Guild):
+    ch = discord.utils.get(guild.text_channels, name="🏷️・change-nickname") or discord.utils.get(
+        guild.text_channels, name="change-nickname"
+    )
+    if not ch:
+        return
+
+    try:
+        async for msg in ch.history(limit=25):
+            if msg.author == guild.me and msg.embeds and "Nickname Customization" in (msg.embeds[0].title or ""):
+                return
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title="🏷️ Chill-Verse Nickname Customization (Level 11+)",
+        description=(
+            "Personalize how you appear in chat conversations across Chill-Verse!\n\n"
+            "🔒 **Eligibility Requirement**:\n"
+            "• You must be **Level 11 or higher** to customize your nickname.\n"
+            "• Active community chatters and server boosters unlock this perk automatically!\n\n"
+            "✨ Click **Change Nickname** below to set your name, or **Reset to Default** anytime."
+        ),
+        color=discord.Color.gold(),
+    )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text="Chill-Verse Identity Perks • Level 11+ Restricted")
+
+    try:
+        await ch.send(embed=embed, view=NicknamePanelView())
+    except discord.HTTPException as e:
+        print(f"[Nickname Deploy Error]: {e}")
+
+
 async def deploy_rules_panel(guild: discord.Guild):
     ch = discord.utils.get(guild.text_channels, name="server-rules")
     if not ch:
@@ -2016,6 +2127,7 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     )
     admin_embed.add_field(name=f"`{prefix}clean_start`", value="**Auto-clears all stale bot notifications, warnings, and alerts across the server.**", inline=False)
     admin_embed.add_field(name=f"`{prefix}deploy_panels`", value="Runs and deploys ALL server UI panels across every designated channel.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}setup_nicknames`", value="Deploys the Level 11+ Nickname Customization panel in `#🏷️・change-nickname`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_channels`", value="Non-destructively provisions missing blueprint channels & categories.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_roles`", value="Provisions missing staff, ping, cosmetic, and tier level roles.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_birthdays`", value="Deploys the interactive Birthday Registration panel in `birthdays`.", inline=False)
@@ -2065,6 +2177,7 @@ async def deploy_tickets_panel(guild: discord.Guild):
 async def deploy_all_system_panels(guild: discord.Guild, prefix: str = "."):
     """Runs and deploys every interface panel across the server in sequence."""
     await deploy_rules_panel(guild)
+    await deploy_nickname_panel(guild)
     await deploy_team_rules_panel(guild)
     await deploy_team_news_commands_panel(guild, prefix)
     await deploy_bot_commands_panel(guild, prefix)
@@ -2108,6 +2221,7 @@ class ArkBot(commands.Bot):
         self.add_view(NotificationRolesView())
         self.add_view(ConfessionPanelView())
         self.add_view(BirthdayPanelView())
+        self.add_view(NicknamePanelView())
 
         asyncio.create_task(self._auto_restore_all_guilds())
 
@@ -2219,10 +2333,10 @@ class ArkBot(commands.Bot):
                 # Step 2: Ensure any missing blueprint channels/roles are present
                 await self._provision_blueprint_and_roles(guild)
 
-                # Step 3: AUTO CLEAR ALL BOT NOTIFICATIONS & STALE ALERTS FOR CLEAN START
+                # Step 3: Clear all old bot alerts for clean start
                 await clear_all_bot_notifications(guild)
 
-                # Step 4: Deploy all clean system panels
+                # Step 4: Deploy all clean system panels (including nicknames)
                 await deploy_all_system_panels(guild, self.command_prefix)
 
                 # Step 5: Enforce strict Admin Area permissions
@@ -3346,6 +3460,14 @@ async def cmd_clean_start(ctx: commands.Context):
     await status_msg.edit(content="✨ **Clean Start Complete! All stale bot notifications wiped and fresh panels deployed.**")
 
 
+@bot.command(name="setup_nicknames", aliases=["deploy_nicknames", "nickname_panel"])
+@commands.has_permissions(administrator=True)
+async def cmd_setup_nicknames(ctx: commands.Context):
+    """Deploys the nickname changer panel to #🏷️・change-nickname."""
+    await deploy_nickname_panel(ctx.guild)
+    await ctx.send("✅ Nickname changer panel deployed to `#🏷️・change-nickname`!", delete_after=5)
+
+
 @bot.command(name="deploy_panels", aliases=["setup_all_panels", "run_all_panels"])
 @commands.has_permissions(administrator=True)
 async def cmd_deploy_all_panels(ctx: commands.Context):
@@ -3561,7 +3683,7 @@ async def restore_all(ctx: commands.Context):
     # Clean previous bot messages & alerts
     await clear_all_bot_notifications(ctx.guild)
 
-    # Deploy all panels post-restore
+    # Deploy all panels post-restore (including nicknames)
     await deploy_all_system_panels(ctx.guild, bot.command_prefix)
 
     # Overwrite master backup after restoration
