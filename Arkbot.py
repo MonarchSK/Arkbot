@@ -156,7 +156,7 @@ REVIVE_ICEBREAKERS = [
 ]
 
 # ==============================================================================
-# SERVER BLUEPRINT (INCLUDES PUZZLES IN FUN AREA)
+# SERVER BLUEPRINT
 # ==============================================================================
 SERVER_BLUEPRINT: List[Dict[str, Any]] = [
     {
@@ -1064,14 +1064,33 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
 
 
 # ==============================================================================
-# UI COMPONENTS (XP DROPS, CONFESSIONS, COLOURS, NOTIFICATIONS, TICKETS, BIRTHDAYS)
+# UI COMPONENTS (XP DROPS WITH AUTO-DISAPPEAR, CONFESSIONS, COLOURS, TICKETS, BDAY)
 # ==============================================================================
+async def _schedule_message_deletion(message: Optional[discord.Message], delay: float = 7.0):
+    """Helper to cleanly delete a message after a brief delay."""
+    if not message:
+        return
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except (discord.NotFound, discord.HTTPException):
+        pass
+
+
 class ClaimXPDropView(View):
     def __init__(self, xp_amount: int):
-        super().__init__(timeout=300.0)
+        super().__init__(timeout=300.0)  # 5 Minutes timeout
         self.xp_amount = xp_amount
         self.claimed = False
         self.message: Optional[discord.Message] = None
+
+    async def on_timeout(self):
+        # Auto-disappear if left unclaimed
+        if not self.claimed and self.message:
+            try:
+                await self.message.delete()
+            except (discord.NotFound, discord.HTTPException):
+                pass
 
     @discord.ui.button(label="🎁 Claim XP", style=discord.ButtonStyle.green)
     async def claim_button(self, interaction: discord.Interaction, button: Button):
@@ -1090,7 +1109,8 @@ class ClaimXPDropView(View):
             description=(
                 f"Congratulations {interaction.user.mention}! You reacted the fastest!\n\n"
                 f"💰 **Reward:** `+{self.xp_amount} XP`\n"
-                f"📊 **Total XP:** `{new_xp:,} XP` (Level {calculate_level(new_xp)})"
+                f"📊 **Total XP:** `{new_xp:,} XP` (Level {calculate_level(new_xp)})\n\n"
+                f"*✨ This message will disappear in a few seconds.*"
             ),
             color=discord.Color.green(),
             timestamp=discord.utils.utcnow(),
@@ -1098,16 +1118,28 @@ class ClaimXPDropView(View):
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         await interaction.response.edit_message(embed=embed, view=self)
 
+        # Disappear 7 seconds after claim
+        target_msg = self.message or interaction.message
+        asyncio.create_task(_schedule_message_deletion(target_msg, delay=7.0))
+
         if isinstance(interaction.user, discord.Member):
             await handle_level_up(interaction.user, prev_xp, new_xp, interaction.channel)
 
 
 class SuperXPDropView(View):
     def __init__(self, xp_amount: int):
-        super().__init__(timeout=180.0)
+        super().__init__(timeout=180.0)  # 3 Minutes timeout
         self.xp_amount = xp_amount
         self.claimed = False
         self.message: Optional[discord.Message] = None
+
+    async def on_timeout(self):
+        # Auto-disappear if left unclaimed
+        if not self.claimed and self.message:
+            try:
+                await self.message.delete()
+            except (discord.NotFound, discord.HTTPException):
+                pass
 
     @discord.ui.button(label="⚡ CLAIM SUPER DROP ⚡", style=discord.ButtonStyle.danger)
     async def claim_super_drop(self, interaction: discord.Interaction, button: Button):
@@ -1126,13 +1158,18 @@ class SuperXPDropView(View):
             description=(
                 f"⚡ {interaction.user.mention} dominated the chat and grabbed the loot!\n\n"
                 f"🔥 **Massive Reward:** `+{self.xp_amount:,} XP`\n"
-                f"📊 **New Total:** `{new_xp:,} XP` (Level {calculate_level(new_xp)})"
+                f"📊 **New Total:** `{new_xp:,} XP` (Level {calculate_level(new_xp)})\n\n"
+                f"*✨ This message will disappear in a few seconds.*"
             ),
             color=discord.Color.from_rgb(255, 69, 0),
             timestamp=discord.utils.utcnow(),
         )
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         await interaction.response.edit_message(embed=embed, view=self)
+
+        # Disappear 7 seconds after claim
+        target_msg = self.message or interaction.message
+        asyncio.create_task(_schedule_message_deletion(target_msg, delay=7.0))
 
         if isinstance(interaction.user, discord.Member):
             await handle_level_up(interaction.user, prev_xp, new_xp, interaction.channel)
