@@ -35,6 +35,7 @@ MASTER_BACKUP_TEMPLATE = "master_backup_{guild_id}.json"
 AFK_USERS: Dict[int, Dict[str, Any]] = {}
 LAST_BUMP_TIME: Optional[datetime.datetime] = None
 BUMP_TIMER_TASK: Optional[asyncio.Task] = None
+BUMP_LOCK = asyncio.Lock()
 BUMP_COOLDOWN_SECONDS = 7200  # 2 Hours
 ANNOUNCED_BIRTHDAYS_TODAY: List[int] = []
 REMINDED_BIRTHDAYS_TOMORROW: List[int] = []
@@ -84,6 +85,7 @@ LEVEL_TIERS: List[Tuple[int, str]] = [
 
 COLOR_ROLES = ["Red", "Yellow", "Green", "Blue", "Orange", "Pink"]
 
+# --- DYNAMIC MESSAGE PRESETS (15 EACH) ---
 AFK_PRESET_MESSAGES = [
     "💔 Slipping away into the quiet shadows... see you when the world feels softer.",
     "🌧️ Wandering through quiet echoes and lonely thoughts. Leaving sweet love behind while I'm away.",
@@ -95,6 +97,11 @@ AFK_PRESET_MESSAGES = [
     "🥺 Stepping into the quiet mist to breathe alone for a bit. Catch you later, lovely souls.",
     "🕊️ Seeking peace in quiet solitude. Leaving warm whispers of affection behind.",
     "🌧️ Drifting into silent solitude to heal and recharge. Keep a warm thought for me.",
+    "☁️ Lost in the clouds for a bit. Keep the chat warm for me.",
+    "🕰️ Stepping out of time for a moment. See you on the other side.",
+    "🎧 Lost in the music and away from the keyboard. Be right back.",
+    "🌌 Stargazing in my own little world... I'll return when the stars align.",
+    "🍃 Gone with the wind. Catch you all when it brings me back."
 ]
 
 AFK_WELCOME_MESSAGES = [
@@ -103,6 +110,16 @@ AFK_WELCOME_MESSAGES = [
     "🎉 Look who returned! We missed you so much, {user}!",
     "🥳 You're finally back! Everything feels complete again. Welcome home, {user}!",
     "✨ Warmest welcome back, {user}! So genuinely happy to see you chatting again!",
+    "💫 The stars have realigned, {user} is back! Welcome!",
+    "✨ Yay, {user} returned! We were just talking about how much we missed you.",
+    "🌸 The garden feels alive again! Welcome back to the chat, {user}.",
+    "🚀 Touchdown! {user} has safely landed back in Chill-Verse.",
+    "🎉 Let's go! {user} is finally off AFK. We missed your vibe!",
+    "🌟 Look who decided to grace us with their presence! Welcome back, {user}!",
+    "☕ Hope you had a great break, {user}! Grab a seat and catch up.",
+    "🦋 The chat is instantly better now that {user} is here. Welcome back!",
+    "🥳 Ring the alarm! {user} has returned to the sanctuary!",
+    "💖 There you are, {user}! The server wasn't the same without you."
 ]
 
 BUMP_PRESET_MESSAGES = [
@@ -116,6 +133,11 @@ BUMP_PRESET_MESSAGES = [
     "🎈 **Soaring Upward!** Another bump, another milestone reached. You made our community proud today!",
     "⚡ **Volt of Energy!** Chill-Verse just received an electrifying boost across Discord.",
     "🌙 **Twilight Ascendance!** Our voices echo louder thanks to your bump. Thank you for showing love!",
+    "🌌 **Galactic Boost!** Chill-Verse is now orbiting at maximum altitude!",
+    "💥 **Impact!** Your bump just shattered the charts. We appreciate you!",
+    "👑 **Royalty Status!** Thank you for treating Chill-Verse like the kingdom it is.",
+    "🌊 **Tidal Wave!** A massive wave of support just hit the server thanks to your bump.",
+    "💎 **Flawless Victory!** You secured the bump and kept our community shining."
 ]
 
 BUMP_15M_MESSAGES = [
@@ -129,6 +151,11 @@ BUMP_15M_MESSAGES = [
     "🔥 **Stoking the Fire!** 15 minutes left on the clock. Who is taking the XP crown this round?",
     "🌟 **Starlight Alert!** Only 15 minutes to go before our next server boost is unlocked.",
     "🎈 **Prepare for Liftoff!** 15 minutes on the countdown. Get your `.bump` command primed!",
+    "⏱️ **15 Minutes!** The hype train is leaving the station soon. Get ready!",
+    "👀 **Keep your eyes peeled!** Only 15 minutes left until the bump button works again.",
+    "⚔️ **Sharpen your swords!** The battle for the next +250 XP begins in 15 minutes.",
+    "🏎️ **Start your engines!** 15 minutes to go. Who will be the fastest to bump?",
+    "⏳ **The sands of time run low!** 15 minutes until Chill-Verse needs your boost."
 ]
 
 BUMP_READY_MESSAGES = [
@@ -142,6 +169,11 @@ BUMP_READY_MESSAGES = [
     "🎈 **BUMP UNLOCKED!** Don't let the server wait—boost us up and take home your XP!",
     "✨ **FRESH CYCLE STARTED!** The clock hit zero! Step up and drop a `.bump` in the chat!",
     "💫 **BOOST WINDOW LIVE!** Let's make Chill-Verse shine across Discord again. Hit `.bump` now!",
+    "🚨 **GO GO GO!** The bump timer is clear! Claim your XP right now!",
+    "🔓 **VAULT UNLOCKED!** The bump cooldown is over. Boost us and grab the 250 XP!",
+    "🏆 **CHAMPION NEEDED!** Who will step up and `.bump` the server today?",
+    "🟢 **GREEN LIGHT!** We are clear for liftoff. Drop a `.bump` in the chat!",
+    "💥 **BOOM! Timer is at ZERO!** Send Chill-Verse to the top and take your reward!"
 ]
 
 REVIVE_ICEBREAKERS = [
@@ -155,6 +187,11 @@ REVIVE_ICEBREAKERS = [
     "What was the most fun thing that happened to you this week?",
     "If you could instantly master any language or musical instrument, which would you pick?",
     "What is your all-time favorite movie that you can rewatch without getting bored?",
+    "If animals could talk, which species would be the rudest?",
+    "What's a movie that everyone loves but you actually secretly hate?",
+    "You can only eat one dessert for the rest of your life. What are you picking?",
+    "What is the weirdest habit you have when you are completely alone?",
+    "If you were forced to participate in a reality TV show, which one would you choose and why?"
 ]
 
 # ==============================================================================
@@ -877,18 +914,31 @@ async def apply_unified_restore(guild: discord.Guild, data: Dict[str, Any]) -> D
     return stats
 
 # ==============================================================================
-# BUMP NOTIFICATION ENGINE
+# BUMP NOTIFICATION ENGINE (BUG FIX IMPLEMENTED)
 # ==============================================================================
 def get_bump_role_mentions(guild: discord.Guild) -> str:
     bump_role = discord.utils.find(lambda r: r.name.lower().strip() in ["bump pings", "bump ping", "bumping"], guild.roles)
     return bump_role.mention if bump_role else "@here"
 
-async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.TextChannel, initial_delay: int = 0):
-    target_channel = discord.utils.get(guild.text_channels, name="⏰・bump") or discord.utils.get(guild.text_channels, name="bump")
+async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.TextChannel, expected_bump_time: datetime.datetime):
+    """
+    Robust Timer: Checks the inception timestamp (`expected_bump_time`) against the global 
+    `LAST_BUMP_TIME`. If a new bump happened during sleep, this task silently aborts to prevent 
+    duplicate notifications.
+    """
+    target_channel = discord.utils.get(guild.text_channels, name="⏰・bump") or discord.utils.get(guild.text_channels, name="bump") or origin_channel
     if not target_channel: return
+    
+    now = datetime.datetime.now(datetime.timezone.utc)
+    elapsed = (now - expected_bump_time).total_seconds()
+    initial_delay = int(elapsed)
+
     try:
         if (fifteen_min_mark := 6300 - initial_delay) > 0:
             await asyncio.sleep(fifteen_min_mark)
+            # Validation Step 1: Ensure we are still the active bump timer
+            if LAST_BUMP_TIME != expected_bump_time: return
+            
             msg_15m = random.choice(BUMP_15M_MESSAGES)
             embed = discord.Embed(
                 title="⏰ Bump Reminder — 15 Minutes Remaining!",
@@ -898,7 +948,14 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
             embed.set_footer(text="Chill-Verse Bump Watch • 15 Minute Notice")
             await target_channel.send(content=get_bump_role_mentions(guild), embed=embed)
 
-        await asyncio.sleep(max(0, BUMP_COOLDOWN_SECONDS - initial_delay - max(0, fifteen_min_mark)))
+        # Wait remaining time until fully cooled down
+        remaining = BUMP_COOLDOWN_SECONDS - (datetime.datetime.now(datetime.timezone.utc) - expected_bump_time).total_seconds()
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+            
+        # Validation Step 2: Final check before dropping ready notification
+        if LAST_BUMP_TIME != expected_bump_time: return
+        
         msg_ready = random.choice(BUMP_READY_MESSAGES)
         embed = discord.Embed(
             title="🔔 Chill-Verse is Ready to Bump!",
@@ -1470,6 +1527,7 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     admin_embed.add_field(name=f"`{prefix}colours`", value="Deploys the cosmetic color selection panel in `🎨・colours`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_confession_panel`", value="Deploys the anonymous confession box in `🚦・confession`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_notifications`", value="Deploys optional community notification role buttons.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}setbirthday [@user] [DD/MM]`", value="Manually updates or sets a member's birthday.", inline=False)
     admin_embed.add_field(name=f"`{prefix}refresh_rules`", value="Refreshes guidelines in `#🛡️・team-rules` and command list in `#🚨・team-news`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}refresh_commands`", value="Refreshes this complete master manual in `#💼・bot-commands`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}backup_all`", value="Generates and overwrites the single unified master backup snapshot.", inline=False)
@@ -1640,7 +1698,9 @@ class ArkBot(commands.Bot):
                 target_g = self.guilds[0]
                 target_ch = discord.utils.get(target_g.text_channels, name="⏰・bump")
                 if target_ch:
-                    BUMP_TIMER_TASK = asyncio.create_task(schedule_bump_timers(target_g, target_ch, initial_delay=int(elapsed)))
+                    if BUMP_TIMER_TASK and not BUMP_TIMER_TASK.done():
+                        BUMP_TIMER_TASK.cancel()
+                    BUMP_TIMER_TASK = asyncio.create_task(schedule_bump_timers(target_g, target_ch, LAST_BUMP_TIME))
 
     async def close(self):
         print("[Shutdown Engine] Flushing state and XP cache to disk...")
@@ -1994,22 +2054,28 @@ async def bump(ctx: commands.Context):
         except (discord.Forbidden, discord.NotFound, discord.HTTPException): pass
         return await ctx.send(f"⚠️ {ctx.author.mention}, the `.bump` command can only be used in {bump_channel.mention}!", delete_after=6)
 
-    now = discord.utils.utcnow()
-    if LAST_BUMP_TIME is not None:
-        elapsed = (now - LAST_BUMP_TIME).total_seconds()
-        if elapsed < BUMP_COOLDOWN_SECONDS:
-            try: await ctx.message.delete()
-            except (discord.Forbidden, discord.NotFound, discord.HTTPException): pass
-            remaining = int(BUMP_COOLDOWN_SECONDS - elapsed)
-            hours, minutes, seconds = remaining // 3600, (remaining % 3600) // 60, remaining % 60
-            time_str = f"{hours}h {minutes}m {seconds}s" if hours > 0 else f"{minutes}m {seconds}s"
-            lock_embed = discord.Embed(title="⛔ BUMP IS CURRENTLY LOCKED!", description=f"**Chill-Verse is on cooldown.**\n\n⏳ **Time Remaining:** `{time_str}`\n🔔 The bot will ping **@Bump Pings** in this channel **15 minutes prior** and **when ready**!", color=discord.Color.red())
-            return await ctx.send(embed=lock_embed, delete_after=7)
+    # Use lock to prevent double execution if user spams the command
+    async with BUMP_LOCK:
+        now = discord.utils.utcnow()
+        if LAST_BUMP_TIME is not None:
+            elapsed = (now - LAST_BUMP_TIME).total_seconds()
+            if elapsed < BUMP_COOLDOWN_SECONDS:
+                try: await ctx.message.delete()
+                except (discord.Forbidden, discord.NotFound, discord.HTTPException): pass
+                remaining = int(BUMP_COOLDOWN_SECONDS - elapsed)
+                hours, minutes, seconds = remaining // 3600, (remaining % 3600) // 60, remaining % 60
+                time_str = f"{hours}h {minutes}m {seconds}s" if hours > 0 else f"{minutes}m {seconds}s"
+                lock_embed = discord.Embed(title="⛔ BUMP IS CURRENTLY LOCKED!", description=f"**Chill-Verse is on cooldown.**\n\n⏳ **Time Remaining:** `{time_str}`\n🔔 The bot will ping **@Bump Pings** in this channel **15 minutes prior** and **when ready**!", color=discord.Color.red())
+                return await ctx.send(embed=lock_embed, delete_after=7)
 
-    LAST_BUMP_TIME = now
-    await persist_runtime_state()
-    prev_xp, new_total_xp = await add_user_xp(ctx.author.id, 250)
-    
+        LAST_BUMP_TIME = now
+        await persist_runtime_state()
+        prev_xp, new_total_xp = await add_user_xp(ctx.author.id, 250)
+        
+        if BUMP_TIMER_TASK and not BUMP_TIMER_TASK.done(): 
+            BUMP_TIMER_TASK.cancel()
+        BUMP_TIMER_TASK = asyncio.create_task(schedule_bump_timers(ctx.guild, bump_channel or ctx.channel, LAST_BUMP_TIME))
+
     embed = discord.Embed(
         title="✨ CHILL-VERSE BUMPED! ✨",
         description=f"{random.choice(BUMP_PRESET_MESSAGES)}\n\n🎁 **Reward:** `{ctx.author.display_name}` earned **+250 XP**!\n📊 **Total XP:** `{new_total_xp:,} XP` (Level {calculate_level(new_total_xp)})\n\n🔒 **Bumping is now locked for the next 2 hours.**",
@@ -2020,8 +2086,30 @@ async def bump(ctx: commands.Context):
     await ctx.send(embed=embed)
     await handle_level_up(ctx.author, prev_xp, new_total_xp, ctx.channel)
 
-    if BUMP_TIMER_TASK and not BUMP_TIMER_TASK.done(): BUMP_TIMER_TASK.cancel()
-    BUMP_TIMER_TASK = asyncio.create_task(schedule_bump_timers(ctx.guild, bump_channel or ctx.channel))
+@bot.command(name="setbirthday", aliases=["setbday", "updatebday", "updatebirthday"])
+@commands.has_permissions(administrator=True)
+async def set_birthday(ctx: commands.Context, member: discord.Member, dob: str):
+    dob_val = dob.strip()
+    dob_match = re.match(r"^(\d{1,2})[/\-.](\d{1,2})", dob_val)
+    if not dob_match:
+        return await ctx.send("⚠️ Invalid format! Please enter the birthday in `DD/MM` or `DD/MM/YYYY` format (e.g. `14/06`).", delete_after=6)
+    
+    day, month = int(dob_match.group(1)), int(dob_match.group(2))
+    if day < 1 or day > 31 or month < 1 or month > 12:
+        return await ctx.send("⚠️ That calendar date is invalid. Please enter a valid date.", delete_after=6)
+        
+    formatted_bdate = f"{str(day).zfill(2)}/{str(month).zfill(2)}"
+    bdays = await load_birthdays()
+    bdays[str(member.id)] = formatted_bdate
+    await save_birthdays(bdays)
+    
+    embed = discord.Embed(
+        title="🎂 Birthday Updated (Admin)",
+        description=f"Successfully set {member.mention}'s birthday to **{formatted_bdate}**.",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow()
+    )
+    await ctx.send(embed=embed)
 
 @bot.command(name="revive", aliases=["chatrevive"])
 @commands.guild_only()
