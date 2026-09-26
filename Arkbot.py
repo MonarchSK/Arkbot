@@ -68,6 +68,8 @@ SYSTEM_CHANNELS = {
     "bot-errors",
     "🧪・bot-testing",
     "bot-testing",
+    "📢・discord-news",
+    "discord-news",
 }
 
 LEVEL_TIERS: List[Tuple[int, str]] = [
@@ -156,20 +158,75 @@ REVIVE_ICEBREAKERS = [
 ]
 
 # ==============================================================================
-# SERVER BLUEPRINT (INCLUDES NICKNAMES & PUZZLES)
+# SERVER BLUEPRINT (UPDATED TO MATCH NEW SCREENSHOTS)
 # ==============================================================================
 SERVER_BLUEPRINT: List[Dict[str, Any]] = [
-    {"category": "Welcome", "channels": [{"name": "📢・announcements", "type": "text", "restricted": False, "read_only": True}, {"name": "server-rules", "type": "text", "restricted": False, "read_only": True}, {"name": "👋・welcome", "type": "text", "restricted": False}, {"name": "🏷️・change-nickname", "type": "text", "restricted": False, "read_only": True}]},
-    {"category": "Team <3", "channels": [{"name": "team-news", "type": "text", "restricted": True}, {"name": "🛡️・team-rules", "type": "text", "restricted": True}, {"name": "💬・team-chat", "type": "text", "restricted": True}, {"name": "⏰・bump", "type": "text", "restricted": False}]},
-    {"category": "Events <3", "channels": [{"name": "🎉・gwys", "type": "text", "restricted": False}, {"name": "⭐・vouch", "type": "text", "restricted": False}]},
-    {"category": "Chill Area <3", "channels": [{"name": "discussions-🐣", "type": "forum", "restricted": False}, {"name": "☁️・chat", "type": "text", "restricted": False}, {"name": "🍸・chat-ai", "type": "text", "restricted": False}, {"name": "🪄・chat-en", "type": "text", "restricted": False}, {"name": "🐥・discussions", "type": "text", "restricted": False}]},
-    {"category": "Media <3", "channels": [{"name": "pfp-share🛼", "type": "text", "restricted": False}, {"name": "media-share🪹", "type": "text", "restricted": False}, {"name": "selfies🫂", "type": "text", "restricted": False}]},
-    {"category": "Fun Area <3", "channels": [{"name": "playground-🥊", "type": "text", "restricted": False}, {"name": "birthdays", "type": "text", "restricted": False}, {"name": "🚦confession-🖇️", "type": "text", "restricted": False}, {"name": "memes🤪", "type": "text", "restricted": False}, {"name": "🖇️-daily-polls", "type": "text", "restricted": False}, {"name": "🖇️-roblox-elites", "type": "text", "restricted": False}, {"name": "🧩・puzzles", "type": "text", "restricted": False}]},
-    {"category": "Hobbies <3", "channels": [{"name": "photography📷", "type": "text", "restricted": False}, {"name": "arts-and-crafts🎨", "type": "text", "restricted": False}, {"name": "🎤drop-your-songs", "type": "text", "restricted": False}]},
-    {"category": "Voice Chat <3", "channels": [{"name": "🍕 | chit-chat", "type": "voice", "restricted": False, "user_limit": 12}, {"name": "🍔 | Duo", "type": "voice", "restricted": False, "user_limit": 2}, {"name": "🍞 | Trio", "type": "voice", "restricted": False, "user_limit": 3}, {"name": "🧀 | squad", "type": "voice", "restricted": False, "user_limit": 4}, {"name": "🍺 | Vip", "type": "voice", "restricted": False, "user_limit": 50}]},
-    {"category": "Music <3", "channels": [{"name": "🎵 Hade Music", "type": "voice", "restricted": False}, {"name": "🎸 -Atom Music", "type": "voice", "restricted": False}]},
-    {"category": "Info 🩵", "channels": [{"name": "📢・level-announcements", "type": "text", "restricted": False, "read_only": True}, {"name": "🎫・tickets", "type": "text", "restricted": False}, {"name": "🎨・colours", "type": "text", "restricted": False}]},
-    {"category": "Admin Area 🔒", "channels": [{"name": "💼・bot-commands", "type": "text", "restricted": True}, {"name": "📜・audit-logs", "type": "text", "restricted": True}, {"name": "🩸・bot-errors", "type": "text", "restricted": True}, {"name": "🧪・bot-testing", "type": "text", "restricted": True}]},
+    {"category": "Information & Updates", "channels": [
+        {"name": "🛡️・server-rules", "type": "text", "restricted": False, "read_only": True},
+        {"name": "👋・welcome", "type": "text", "restricted": False},
+        {"name": "📢・announcements", "type": "text", "restricted": False, "read_only": True},
+        {"name": "🎂・birthdays", "type": "text", "restricted": False},
+        {"name": "📢・level-announcements", "type": "text", "restricted": False, "read_only": True},
+        {"name": "🎫・tickets", "type": "text", "restricted": False},
+        {"name": "🎨・colours", "type": "text", "restricted": False},
+        {"name": "🏷️・change-nickname", "type": "text", "restricted": False, "read_only": True}
+    ]},
+    {"category": "Team Area", "channels": [
+        {"name": "🚨・team-news", "type": "text", "restricted": True},
+        {"name": "🛡️・team-rules", "type": "text", "restricted": True},
+        {"name": "💬・team-chat", "type": "text", "restricted": True},
+        {"name": "⏰・bump", "type": "text", "restricted": False}
+    ]},
+    {"category": "Chill Area", "channels": [
+        {"name": "☁️・chat", "type": "text", "restricted": False},
+        {"name": "🍸・chat-ai", "type": "text", "restricted": False},
+        {"name": "🪄・chat-en", "type": "text", "restricted": False},
+        {"name": "✨・chat-ai-beta", "type": "text", "restricted": False}
+    ]},
+    {"category": "Forms & Discussions Area", "channels": [
+        {"name": "🖇️・daily-polls", "type": "text", "restricted": False},
+        {"name": "🗣️・nerdyy-stuff", "type": "text", "restricted": False},
+        {"name": "💗・shayari-and-poetry", "type": "text", "restricted": False},
+        {"name": "🐥・discussions", "type": "text", "restricted": False}
+    ]},
+    {"category": "Fun Area", "channels": [
+        {"name": "🥊・playground", "type": "text", "restricted": False},
+        {"name": "🚦・confession", "type": "text", "restricted": False},
+        {"name": "🤪・memes", "type": "text", "restricted": False}
+    ]},
+    {"category": "Event Area", "channels": [
+        {"name": "🎉・giveaways", "type": "text", "restricted": False},
+        {"name": "⭐・vouch", "type": "text", "restricted": False}
+    ]},
+    {"category": "Media & Share", "channels": [
+        {"name": "🍩・media-share", "type": "text", "restricted": False},
+        {"name": "🎨・arts-and-crafts", "type": "text", "restricted": False},
+        {"name": "🛼・pfp-share", "type": "text", "restricted": False},
+        {"name": "📷・photography", "type": "text", "restricted": False},
+        {"name": "🫂・selfies", "type": "text", "restricted": False}
+    ]},
+    {"category": "Music Area", "channels": [
+        {"name": "🎵・Hade Music", "type": "voice", "restricted": False},
+        {"name": "🎸・Atom Music", "type": "voice", "restricted": False}
+    ]},
+    {"category": "Special Activities", "channels": [
+        {"name": "🎤・drop-your-songs", "type": "text", "restricted": False},
+        {"name": "ヅ・Chill-Verse activities !!", "type": "voice", "restricted": False}
+    ]},
+    {"category": "Voice Chat", "channels": [
+        {"name": "🍔 | Duo", "type": "voice", "restricted": False, "user_limit": 2},
+        {"name": "🍞 | Trio", "type": "voice", "restricted": False, "user_limit": 3},
+        {"name": "🧀 | squad", "type": "voice", "restricted": False, "user_limit": 4},
+        {"name": "🍕 | chit-chat", "type": "voice", "restricted": False, "user_limit": 12},
+        {"name": "🍺 | Vip", "type": "voice", "restricted": False, "user_limit": 50}
+    ]},
+    {"category": "Admin Area 🔒", "channels": [
+        {"name": "📢・discord-news", "type": "text", "restricted": True},
+        {"name": "💼・bot-commands", "type": "text", "restricted": True},
+        {"name": "🩸・bot-errors", "type": "text", "restricted": True},
+        {"name": "📜・audit-logs", "type": "text", "restricted": True},
+        {"name": "🧪・bot-testing", "type": "text", "restricted": True}
+    ]},
 ]
 
 # ==============================================================================
@@ -597,8 +654,8 @@ async def purge_all_old_backups(channel: discord.TextChannel):
 async def clear_all_bot_notifications(guild: discord.Guild):
     """Clears all stale bot messages and alerts across control channels for a clean start."""
     full_wipe_channels = [
-        "team-news", "⏰・bump", "bump", "🧪・bot-testing", "bot-testing", "💼・bot-commands", "bot-commands",
-        "🛡️・team-rules", "team-rules", "server-rules", "🎨・colours", "colours", "🎫・tickets", "tickets",
+        "🚨・team-news", "team-news", "⏰・bump", "bump", "🧪・bot-testing", "bot-testing", "💼・bot-commands", "bot-commands",
+        "🛡️・team-rules", "team-rules", "🛡️・server-rules", "server-rules", "🎨・colours", "colours", "🎫・tickets", "tickets",
         "🏷️・change-nickname", "change-nickname",
     ]
 
@@ -611,7 +668,7 @@ async def clear_all_bot_notifications(guild: discord.Guild):
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-    confession_ch = discord.utils.get(guild.text_channels, name="🚦confession-🖇️") or discord.utils.get(guild.text_channels, name="confessions")
+    confession_ch = discord.utils.get(guild.text_channels, name="🚦・confession") or discord.utils.get(guild.text_channels, name="confessions")
     if confession_ch:
         try:
             async for msg in confession_ch.history(limit=50):
@@ -622,7 +679,7 @@ async def clear_all_bot_notifications(guild: discord.Guild):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
-    bday_ch = discord.utils.get(guild.text_channels, name="birthdays")
+    bday_ch = discord.utils.get(guild.text_channels, name="🎂・birthdays") or discord.utils.get(guild.text_channels, name="birthdays")
     if bday_ch:
         try:
             async for msg in bday_ch.history(limit=50):
@@ -694,7 +751,7 @@ async def generate_unified_backup_payload(guild: discord.Guild) -> Dict[str, Any
             if default_ow:
                 if default_ow.view_channel is False: is_restricted = True
                 if default_ow.send_messages is False: is_read_only = True
-            elif cat.name in ["Team <3", "Admin Area 🔒"]:
+            elif cat.name in ["Team Area", "Admin Area 🔒"]:
                 is_restricted = True
 
             ch_item = {"name": ch.name, "type": ch_type, "restricted": is_restricted, "read_only": is_read_only}
@@ -982,7 +1039,7 @@ class ConfessionModal(Modal, title="Submit Anonymous Confession"):
         await interaction.response.defer(ephemeral=True)
         guild = await resolve_guild_context(interaction)
         if not guild: return await interaction.followup.send("⚠️ Error: Server context could not be resolved.", ephemeral=True)
-        confession_ch = discord.utils.get(guild.text_channels, name="🚦confession-🖇️") or discord.utils.get(guild.text_channels, name="confessions")
+        confession_ch = discord.utils.get(guild.text_channels, name="🚦・confession") or discord.utils.get(guild.text_channels, name="confessions")
         if not confession_ch: return await interaction.followup.send("⚠️ Confession channel not found!", ephemeral=True)
         confession_id = await record_confession(interaction.user.id, self.confession.value)
         embed = discord.Embed(title=f"💌 Anonymous Confession #{confession_id}", description=self.confession.value, color=discord.Color.from_rgb(255, 105, 180), timestamp=discord.utils.utcnow())
@@ -1185,7 +1242,7 @@ class TicketView(View):
         guild = interaction.guild
         if not guild: return await interaction.followup.send("Tickets can only be opened inside the server.", ephemeral=True)
 
-        category = discord.utils.get(guild.categories, name="Team <3")
+        category = discord.utils.get(guild.categories, name="Team Area")
         clean_user_name = re.sub(r"[^a-zA-Z0-9_-]", "", interaction.user.name).lower() or "user"
         channel_name = f"ticket-{clean_user_name}"
 
@@ -1236,7 +1293,7 @@ async def deploy_nickname_panel(guild: discord.Guild):
     except discord.HTTPException as e: print(f"[Nickname Deploy Error]: {e}")
 
 async def deploy_rules_panel(guild: discord.Guild):
-    ch = discord.utils.get(guild.text_channels, name="server-rules")
+    ch = discord.utils.get(guild.text_channels, name="🛡️・server-rules") or discord.utils.get(guild.text_channels, name="server-rules")
     if not ch: return
     try:
         async for msg in ch.history(limit=25):
@@ -1257,7 +1314,7 @@ async def deploy_rules_panel(guild: discord.Guild):
     except discord.HTTPException as e: print(f"[Rules Panel Deploy Error]: {e}")
 
 async def deploy_birthday_panel(guild: discord.Guild):
-    bday_ch = discord.utils.get(guild.text_channels, name="birthdays")
+    bday_ch = discord.utils.get(guild.text_channels, name="🎂・birthdays") or discord.utils.get(guild.text_channels, name="birthdays")
     if not bday_ch: return
     try:
         async for msg in bday_ch.history(limit=25):
@@ -1277,7 +1334,7 @@ async def deploy_birthday_panel(guild: discord.Guild):
     except discord.HTTPException as e: print(f"[Birthday Panel Deploy Error]: {e}")
 
 async def deploy_confession_panel(guild: discord.Guild):
-    confession_ch = discord.utils.get(guild.text_channels, name="🚦confession-🖇️") or discord.utils.get(guild.text_channels, name="confessions")
+    confession_ch = discord.utils.get(guild.text_channels, name="🚦・confession") or discord.utils.get(guild.text_channels, name="confessions")
     if not confession_ch: return
     try:
         async for msg in confession_ch.history(limit=25):
@@ -1336,7 +1393,7 @@ async def deploy_team_rules_panel(guild: discord.Guild):
 
     rules_embed = discord.Embed(title="🛡️ CHILL-VERSE TEAM GUIDELINES & PROTOCOL", description="Welcome to the internal staff directory. Adhere strictly to moderation escalation orders at all times.", color=discord.Color.dark_red(), timestamp=discord.utils.utcnow())
     rules_embed.add_field(name="1. Impartiality & Maturity", value=("• Moderate objectively. Never let personal disputes dictate punishments.\n• Never use permissions or administrative authority in casual arguments.\n• Keep staff disagreements strictly behind closed doors in `💬・team-chat`."), inline=False)
-    rules_embed.add_field(name="2. Confidentiality & Security", value=("• Everything inside `Team <3` and `Admin Area 🔒` is strictly classified.\n• Never leak ticket discussions, audit logs, or member disciplinary history.\n• Do not invite external bots or modify permissions without High Command approval."), inline=False)
+    rules_embed.add_field(name="2. Confidentiality & Security", value=("• Everything inside `Team Area` and `Admin Area 🔒` is strictly classified.\n• Never leak ticket discussions, audit logs, or member disciplinary history.\n• Do not invite external bots or modify permissions without High Command approval."), inline=False)
     rules_embed.add_field(name="3. Command Escalation Hierarchy", value=("• **Supreme Leader / Highness**: Executive architecture & disaster restores.\n• **Authority**: Channel isolation, bulk cleanup, broadcasts & lockdowns.\n• **Moderators / Trial Mods**: Chat pacing, user warnings, timeouts, and tickets."), inline=False)
     if guild.icon: rules_embed.set_thumbnail(url=guild.icon.url)
     rules_embed.set_footer(text="Chill-Verse Staff Operations • Internal Document")
@@ -1344,7 +1401,7 @@ async def deploy_team_rules_panel(guild: discord.Guild):
     except Exception: pass
 
 async def deploy_team_news_commands_panel(guild: discord.Guild, prefix: str = "."):
-    team_news_ch = discord.utils.get(guild.text_channels, name="team-news")
+    team_news_ch = discord.utils.get(guild.text_channels, name="🚨・team-news") or discord.utils.get(guild.text_channels, name="team-news")
     if not team_news_ch: return
     try:
         async for msg in team_news_ch.history(limit=50):
@@ -1407,12 +1464,12 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     admin_embed.add_field(name=f"`{prefix}setup_nicknames`", value="Deploys the Level 11+ Nickname Customization panel in `#🏷️・change-nickname`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_channels`", value="Non-destructively provisions missing blueprint channels & categories.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_roles`", value="Provisions missing staff, ping, cosmetic, and tier level roles.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}setup_birthdays`", value="Deploys the interactive Birthday Registration panel in `birthdays`.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}setup_birthdays`", value="Deploys the interactive Birthday Registration panel in `🎂・birthdays`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_tickets`", value="Deploys the persistent Support & Staff Application panel in `🎫・tickets`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}colours`", value="Deploys the cosmetic color selection panel in `🎨・colours`.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}setup_confession_panel`", value="Deploys the anonymous confession box in `🚦confession-🖇️`.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}setup_confession_panel`", value="Deploys the anonymous confession box in `🚦・confession`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_notifications`", value="Deploys optional community notification role buttons.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}refresh_rules`", value="Refreshes guidelines in `#🛡️・team-rules` and command list in `#team-news`.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}refresh_rules`", value="Refreshes guidelines in `#🛡️・team-rules` and command list in `#🚨・team-news`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}refresh_commands`", value="Refreshes this complete master manual in `#💼・bot-commands`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}backup_all`", value="Generates and overwrites the single unified master backup snapshot.", inline=False)
     admin_embed.add_field(name=f"`{prefix}restore_all`", value="Restores channels, permissions, XP, birthdays, and confessions.", inline=False)
@@ -1633,7 +1690,7 @@ async def on_ready():
 
     if not UPDATE_NOTIFIED:
         for guild in bot.guilds:
-            team_news_ch = discord.utils.get(guild.text_channels, name="team-news")
+            team_news_ch = discord.utils.get(guild.text_channels, name="🚨・team-news") or discord.utils.get(guild.text_channels, name="team-news")
             if team_news_ch:
                 embed = discord.Embed(title="🚀 Arkbot Operational — Full Engine Online!", description="Clean start executed. Master auto-backups, bump trackers, birthday reminders, and all panels online.", color=discord.Color.green(), timestamp=discord.utils.utcnow())
                 try: await team_news_ch.send(embed=embed)
@@ -1858,7 +1915,7 @@ async def birthday_announcer_task():
 
     birthdays = await load_birthdays()
     for guild in bot.guilds:
-        bday_ch = discord.utils.get(guild.text_channels, name="birthdays")
+        bday_ch = discord.utils.get(guild.text_channels, name="🎂・birthdays") or discord.utils.get(guild.text_channels, name="birthdays")
         if not bday_ch: continue
 
         for uid_str, bdate in birthdays.items():
@@ -1979,7 +2036,7 @@ async def check_xp(ctx: commands.Context, member: Optional[discord.Member] = Non
 @bot.command(name="birthdays", aliases=["upcoming_birthdays", "upcoming_bdays", "bdayremind"])
 async def upcoming_birthdays_cmd(ctx: commands.Context):
     bdays = await load_birthdays()
-    if not bdays: return await ctx.send("🎂 No birthdays are currently registered. Click the button in `#birthdays` to add yours!", delete_after=6)
+    if not bdays: return await ctx.send("🎂 No birthdays are currently registered. Click the button in `#🎂・birthdays` to add yours!", delete_after=6)
     
     now = datetime.datetime.now(datetime.timezone.utc)
     today_date = datetime.date(now.year, now.month, now.day)
@@ -1998,7 +2055,7 @@ async def upcoming_birthdays_cmd(ctx: commands.Context):
     if not (top_upcoming := upcoming_list[:12]): return await ctx.send("🎂 No upcoming birthdays found among current server members.", delete_after=6)
 
     embed = discord.Embed(title="🎂 Upcoming Chill-Verse Birthdays", description="Here are the upcoming member birthdays recorded in the sanctuary:\n" + "\n".join([f"• {member.mention} — `{bdate}` ({'🎉 **TODAY!**' if days_left == 0 else '⏳ **Tomorrow!**' if days_left == 1 else f'in **{days_left} days**'})" for days_left, member, bdate in top_upcoming]), color=discord.Color.gold(), timestamp=discord.utils.utcnow())
-    embed.set_footer(text="Register or update your date anytime in #birthdays!")
+    embed.set_footer(text="Register or update your date anytime in #🎂・birthdays!")
     await ctx.send(embed=embed)
 
 @bot.command(name="addxp", aliases=["givexp", "add-xp"])
@@ -2255,7 +2312,7 @@ async def setup_roles(ctx: commands.Context):
 @commands.has_permissions(administrator=True)
 async def cmd_setup_birthdays(ctx: commands.Context):
     await deploy_birthday_panel(ctx.guild)
-    await ctx.send("✅ Interactive birthday registration panel deployed to `#birthdays`!", delete_after=5)
+    await ctx.send("✅ Interactive birthday registration panel deployed to `#🎂・birthdays`!", delete_after=5)
 
 @bot.command(name="colours", aliases=["colors", "setup_colours"])
 @commands.has_permissions(administrator=True)
@@ -2267,7 +2324,7 @@ async def cmd_colours(ctx: commands.Context):
 @commands.has_permissions(administrator=True)
 async def cmd_setup_confession(ctx: commands.Context):
     await deploy_confession_panel(ctx.guild)
-    await ctx.send("✅ Anonymous confession panel deployed to `#🚦confession-🖇️`!", delete_after=5)
+    await ctx.send("✅ Anonymous confession panel deployed to `#🚦・confession`!", delete_after=5)
 
 @bot.command(name="setup_notifications", aliases=["setup_pings"])
 @commands.has_permissions(administrator=True)
@@ -2286,7 +2343,7 @@ async def setup_tickets(ctx: commands.Context):
 async def refresh_rules(ctx: commands.Context):
     await deploy_team_rules_panel(ctx.guild)
     await deploy_team_news_commands_panel(ctx.guild, bot.command_prefix)
-    await ctx.send("✅ **Team rules updated in `🛡️・team-rules` and command directory posted in `team-news`!**", delete_after=5)
+    await ctx.send("✅ **Team rules updated in `🛡️・team-rules` and command directory posted in `🚨・team-news`!**", delete_after=5)
 
 @bot.command(name="refresh_commands", aliases=["refresh_bot_commands"])
 @commands.has_permissions(administrator=True)
