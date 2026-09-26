@@ -158,7 +158,7 @@ REVIVE_ICEBREAKERS = [
 ]
 
 # ==============================================================================
-# SERVER BLUEPRINT (UPDATED TO MATCH NEW SCREENSHOTS)
+# SERVER BLUEPRINT
 # ==============================================================================
 SERVER_BLUEPRINT: List[Dict[str, Any]] = [
     {"category": "Information & Updates", "channels": [
@@ -1433,6 +1433,7 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     if guild.icon: header_embed.set_thumbnail(url=guild.icon.url)
 
     member_embed = discord.Embed(title="👥 1. General & Member Commands", description="Commands accessible to all verified community members:", color=discord.Color.green())
+    member_embed.add_field(name=f"`{prefix}about` / `{prefix}aboutme`", value="Displays information about the bot, its maintainer, and terms of use.", inline=False)
     member_embed.add_field(name=f"`{prefix}ping`", value="Checks the bot websocket heartbeat and gateway latency.", inline=False)
     member_embed.add_field(name=f"`{prefix}bump`", value="Bumps Chill-Verse in `⏰・bump` for **+250 XP**.", inline=False)
     member_embed.add_field(name=f"`{prefix}revive` / `{prefix}chatrevive [topic]`", value="Pings **@Chat Revive** with a random icebreaker or custom topic.", inline=False)
@@ -1956,6 +1957,33 @@ async def birthday_announcer_task():
 # ==============================================================================
 @bot.command(name="ping")
 async def ping(ctx: commands.Context): await ctx.send(f"🏓 **Pong!** Latency: `{round(bot.latency * 1000)}ms`")
+
+@bot.command(name="about", aliases=["aboutme", "botinfo"])
+async def about_bot(ctx: commands.Context):
+    owner_mention = ctx.guild.owner.mention if ctx.guild and ctx.guild.owner else "Unknown"
+    
+    embed = discord.Embed(
+        title="🤖 About Arkbot",
+        description="Arkbot is the dedicated, all-in-one proprietary system powering **Chill-Verse**.\nIt handles advanced leveling, secure moderation, automated backups, and dynamic community engagement.",
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="👨‍💻 Bot Maintainer", value="`iamthesubhanahmed`", inline=True)
+    embed.add_field(name="🏢 Company", value="**Tier3.pk**", inline=True)
+    embed.add_field(name="👑 Server Owner", value=owner_mention, inline=True)
+    
+    terms = (
+        "Arkbot is a proprietary architecture developed exclusively for Chill-Verse. "
+        "Unauthorized distribution, modification, reverse-engineering, or commercial reproduction is strictly prohibited. "
+        "By interacting with this bot, you consent to the server's guidelines and Discord's Terms of Service."
+    )
+    embed.add_field(name="📜 Proprietary & Terms of Use", value=terms, inline=False)
+    
+    if ctx.bot.user.avatar:
+        embed.set_thumbnail(url=ctx.bot.user.avatar.url)
+        
+    embed.set_footer(text="Arkbot Core System • Tier3.pk")
+    await ctx.send(embed=embed)
 
 @bot.command(name="bump")
 async def bump(ctx: commands.Context):
