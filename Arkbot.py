@@ -206,7 +206,7 @@ SERVER_BLUEPRINT: List[Dict[str, Any]] = [
         {"name": "📢・level-announcements", "type": "text", "restricted": False, "read_only": True},
         {"name": "🎫・tickets", "type": "text", "restricted": False},
         {"name": "🎨・colours", "type": "text", "restricted": False},
-        {"name": "🏷️・change-nickname", "type": "text", "restricted": False, "read_only": True}
+        {"name": "🏷️️・change-nickname", "type": "text", "restricted": False, "read_only": True}
     ]},
     {"category": "Team Area", "channels": [
         {"name": "🚨・team-news", "type": "text", "restricted": True},
@@ -504,6 +504,29 @@ def is_purge_authorized():
             return True
         raise commands.CheckFailure("⛔ **Restricted:** The purge command is strictly reserved for **Supreme Leader**, **Highness**, and **Authority**.")
     return commands.check(predicate)
+
+def is_team_authorized():
+    async def predicate(ctx: commands.Context):
+        if not ctx.guild:
+            return False
+        if ctx.author.id == ctx.guild.owner_id or getattr(ctx.author.guild_permissions, "administrator", False):
+            return True
+        team_roles = {"supreme leader", "highness", "authority", "head moderator", "moderator", "trial mod", "chill-verse team"}
+        user_roles = {r.name.lower().strip() for r in getattr(ctx.author, "roles", [])}
+        if bool(team_roles.intersection(user_roles)):
+            return True
+        raise commands.CheckFailure("⛔ **Restricted:** Only Staff Team members can execute this command.")
+    return commands.check(predicate)
+
+def can_moderate(ctx: commands.Context, target: discord.Member) -> bool:
+    """Enforces Discord Role Hierarchy."""
+    if target.top_role >= ctx.author.top_role and ctx.author.id != ctx.guild.owner_id:
+        return False
+    if target.top_role >= ctx.guild.me.top_role:
+        return False
+    if target.id == ctx.guild.owner_id or target.id == ctx.author.id:
+        return False
+    return True
 
 def is_team_member(member: Union[discord.Member, discord.User]) -> bool:
     if not isinstance(member, discord.Member):
@@ -914,18 +937,13 @@ async def apply_unified_restore(guild: discord.Guild, data: Dict[str, Any]) -> D
     return stats
 
 # ==============================================================================
-# BUMP NOTIFICATION ENGINE (BUG FIX IMPLEMENTED)
+# BUMP NOTIFICATION ENGINE
 # ==============================================================================
 def get_bump_role_mentions(guild: discord.Guild) -> str:
     bump_role = discord.utils.find(lambda r: r.name.lower().strip() in ["bump pings", "bump ping", "bumping"], guild.roles)
     return bump_role.mention if bump_role else "@here"
 
 async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.TextChannel, expected_bump_time: datetime.datetime):
-    """
-    Robust Timer: Checks the inception timestamp (`expected_bump_time`) against the global 
-    `LAST_BUMP_TIME`. If a new bump happened during sleep, this task silently aborts to prevent 
-    duplicate notifications.
-    """
     target_channel = discord.utils.get(guild.text_channels, name="⏰・bump") or discord.utils.get(guild.text_channels, name="bump") or origin_channel
     if not target_channel: return
     
@@ -936,7 +954,6 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
     try:
         if (fifteen_min_mark := 6300 - initial_delay) > 0:
             await asyncio.sleep(fifteen_min_mark)
-            # Validation Step 1: Ensure we are still the active bump timer
             if LAST_BUMP_TIME != expected_bump_time: return
             
             msg_15m = random.choice(BUMP_15M_MESSAGES)
@@ -948,12 +965,10 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
             embed.set_footer(text="Chill-Verse Bump Watch • 15 Minute Notice")
             await target_channel.send(content=get_bump_role_mentions(guild), embed=embed)
 
-        # Wait remaining time until fully cooled down
         remaining = BUMP_COOLDOWN_SECONDS - (datetime.datetime.now(datetime.timezone.utc) - expected_bump_time).total_seconds()
         if remaining > 0:
             await asyncio.sleep(remaining)
             
-        # Validation Step 2: Final check before dropping ready notification
         if LAST_BUMP_TIME != expected_bump_time: return
         
         msg_ready = random.choice(BUMP_READY_MESSAGES)
@@ -1051,7 +1066,6 @@ class ClaimXPDropView(View):
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         await interaction.response.edit_message(embed=embed, view=self)
         
-        # Safe deletion target
         asyncio.create_task(_schedule_message_deletion(interaction.message, delay=7.0))
         if isinstance(interaction.user, discord.Member):
             await handle_level_up(interaction.user, prev_xp, new_xp, interaction.channel)
@@ -1085,7 +1099,6 @@ class SuperXPDropView(View):
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         await interaction.response.edit_message(embed=embed, view=self)
         
-        # Safe deletion target
         asyncio.create_task(_schedule_message_deletion(interaction.message, delay=7.0))
         if isinstance(interaction.user, discord.Member):
             await handle_level_up(interaction.user, prev_xp, new_xp, interaction.channel)
@@ -1308,7 +1321,7 @@ class TicketView(View):
             interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True),
             guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_channels=True),
         }
-        for rname in ["Supreme Leader", "Highness", "Authority"]:
+        for rname in ["Supreme Leader", "Highness", "Authority", "Head Moderator", "Moderator"]:
             role = discord.utils.get(guild.roles, name=rname)
             if role: overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
@@ -1451,7 +1464,7 @@ async def deploy_team_rules_panel(guild: discord.Guild):
     rules_embed = discord.Embed(title="🛡️ CHILL-VERSE TEAM GUIDELINES & PROTOCOL", description="Welcome to the internal staff directory. Adhere strictly to moderation escalation orders at all times.", color=discord.Color.dark_red(), timestamp=discord.utils.utcnow())
     rules_embed.add_field(name="1. Impartiality & Maturity", value=("• Moderate objectively. Never let personal disputes dictate punishments.\n• Never use permissions or administrative authority in casual arguments.\n• Keep staff disagreements strictly behind closed doors in `💬・team-chat`."), inline=False)
     rules_embed.add_field(name="2. Confidentiality & Security", value=("• Everything inside `Team Area` and `Admin Area 🔒` is strictly classified.\n• Never leak ticket discussions, audit logs, or member disciplinary history.\n• Do not invite external bots or modify permissions without High Command approval."), inline=False)
-    rules_embed.add_field(name="3. Command Escalation Hierarchy", value=("• **Supreme Leader / Highness**: Executive architecture & disaster restores.\n• **Authority**: Channel isolation, bulk cleanup, broadcasts & lockdowns.\n• **Moderators / Trial Mods**: Chat pacing, user warnings, timeouts, and tickets."), inline=False)
+    rules_embed.add_field(name="3. Command Escalation Hierarchy", value=("• **Supreme Leader / Highness**: Executive architecture & disaster restores.\n• **Authority**: Channel isolation, bulk cleanup, broadcasts & lockdowns.\n• **Moderators / Trial Mods**: Chat pacing, user warnings, timeouts, kicks, and bans."), inline=False)
     if guild.icon: rules_embed.set_thumbnail(url=guild.icon.url)
     rules_embed.set_footer(text="Chill-Verse Staff Operations • Internal Document")
     try: await team_rules_ch.send(embed=rules_embed)
@@ -1468,7 +1481,8 @@ async def deploy_team_news_commands_panel(guild: discord.Guild, prefix: str = ".
     except Exception: pass
 
     commands_embed = discord.Embed(title="💼 TEAM & AUTHORITY ACTIVE BOT COMMANDS", description="Reference manual for bot commands accessible to Authority, Moderators, and Team members:", color=discord.Color.gold(), timestamp=discord.utils.utcnow())
-    commands_embed.add_field(name="🧹 Moderation & Purge Suite (Authority)", value=(f"`{prefix}purge <1-1000> [target]` — Bulk delete messages with user/bot/link filters.\n`{prefix}remove_bot_role <@role/@bot/all>` — Immediately cuts bot access from a room."), inline=False)
+    commands_embed.add_field(name="🛡️ Moderation Tools (Team & Staff)", value=(f"`{prefix}ban <@user> [reason]` — Bans a member from the server.\n`{prefix}kick <@user> [reason]` — Kicks a member from the server.\n`{prefix}mute <@user> <duration> [reason]` — Timeouts a member (e.g., `10m`, `1h`, `1d`).\n`{prefix}unmute <@user>` — Removes an active timeout.\n`{prefix}warn <@user> <reason>` — DMs a formal warning and logs it."), inline=False)
+    commands_embed.add_field(name="🧹 Channel Purge & Cleanup (Authority)", value=(f"`{prefix}purge <1-1000> [target]` — Bulk delete messages with user/bot/link filters.\n`{prefix}remove_bot_role <@role/@bot/all>` — Immediately cuts bot access from a room."), inline=False)
     commands_embed.add_field(name="🔒 Channel Security & Overrides (Authority)", value=(f"`{prefix}lock` / `{prefix}unlock` — Mutes or opens the current room for members.\n`{prefix}hide` / `{prefix}show` — Toggles channel visibility from standard members.\n`{prefix}permit <@user/@role>` — Whitelists a member or role into the channel.\n`{prefix}revoke <@user/@role>` — Evicts a member or role from the channel."), inline=False)
     commands_embed.add_field(name="⭐ XP Management & Spawners (Authority)", value=(f"`{prefix}addxp <@user> <amount>` — Grants XP and automatically recalculates rank roles.\n`{prefix}removexp <@user> <amount>` — Deducts XP and updates tier roles accordingly.\n`{prefix}setxp <@user> <amount>` — Sets exact XP and syncs corresponding rank roles.\n`{prefix}superdrop [amount] [#ch]` — Spawns a massive Super XP drop.\n`{prefix}xpdrop [amount] [#ch]` — Spawns a standard wild XP drop."), inline=False)
     commands_embed.add_field(name="📢 Announcements & Community Pacing (Staff & Team)", value=(f"`{prefix}announce [optional #channel] <title> | <text> [--everyone/--here]` — Posts official announcement embeds.\n`{prefix}revive [optional topic]` — Pings the Chat Revive role with an icebreaker prompt.\n`{prefix}afk [reason]` — Sets an AFK status while moderating."), inline=False)
@@ -1509,14 +1523,21 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     mod_embed.add_field(name=f"`{prefix}remove_bot_role <@role / @bot / all>`", value="Immediately strips room access for external bots.", inline=False)
     mod_embed.add_field(name=f"`{prefix}announce [#channel] <title> | <text> [--everyone/--here]`", value="Dispatches a formatted official announcement embed.", inline=False)
 
-    xp_embed = discord.Embed(title="⭐ 3. XP Engine & Manual Spawners", description="Tools to grant, modify, and manually spawn interactive XP drops:", color=discord.Color.gold())
+    team_embed = discord.Embed(title="⚖️ 3. Team Moderation Suite", description="Reserved for **Staff Team, Moderators, and Authority**:", color=discord.Color.red())
+    team_embed.add_field(name=f"`{prefix}ban <@user> [reason]`", value="Bans a member from the server. Checks role hierarchy.", inline=False)
+    team_embed.add_field(name=f"`{prefix}kick <@user> [reason]`", value="Kicks a member from the server.", inline=False)
+    team_embed.add_field(name=f"`{prefix}mute <@user> <time> [reason]`", value="Times out a member (Format: `10m`, `1h`, `1d`).", inline=False)
+    team_embed.add_field(name=f"`{prefix}unmute <@user> [reason]`", value="Removes an active timeout early.", inline=False)
+    team_embed.add_field(name=f"`{prefix}warn <@user> <reason>`", value="DMs a formal warning and logs it to `📜・audit-logs`.", inline=False)
+
+    xp_embed = discord.Embed(title="⭐ 4. XP Engine & Manual Spawners", description="Tools to grant, modify, and manually spawn interactive XP drops:", color=discord.Color.gold())
     xp_embed.add_field(name=f"`{prefix}addxp <@user> <amount>`", value="Grants XP to a member and automatically upgrades rank tier roles.", inline=False)
     xp_embed.add_field(name=f"`{prefix}removexp <@user> <amount>`", value="Deducts XP from a member and demotes rank tier roles if needed.", inline=False)
     xp_embed.add_field(name=f"`{prefix}setxp <@user> <amount>`", value="Directly sets a member's XP to an exact number and recalculates rank tiers.", inline=False)
     xp_embed.add_field(name=f"`{prefix}superdrop [amount] [#ch]`", value="**Manually spawns a Super XP Drop** (defaults to 1,000–5,000 XP).", inline=False)
     xp_embed.add_field(name=f"`{prefix}xpdrop [amount] [#ch]`", value="**Manually spawns a Standard XP Drop** (defaults to 50–150 XP).", inline=False)
 
-    admin_embed = discord.Embed(title="⚙️ 4. Administration, Panels & Disaster Recovery", description="System recovery suite restricted to **Supreme Leader** & **Highness**:", color=discord.Color.red())
+    admin_embed = discord.Embed(title="⚙️ 5. Administration, Panels & Disaster Recovery", description="System recovery suite restricted to **Supreme Leader** & **Highness**:", color=discord.Color.dark_red())
     admin_embed.add_field(name=f"`{prefix}clean_start`", value="**Auto-clears all stale bot notifications, warnings, and alerts across the server.**", inline=False)
     admin_embed.add_field(name=f"`{prefix}deploy_panels`", value="Runs and deploys ALL server UI panels across every designated channel.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_nicknames`", value="Deploys the Level 11+ Nickname Customization panel in `#🏷️・change-nickname`.", inline=False)
@@ -1539,6 +1560,7 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
         await cmd_channel.send(embed=header_embed)
         await cmd_channel.send(embed=member_embed)
         await cmd_channel.send(embed=mod_embed)
+        await cmd_channel.send(embed=team_embed)
         await cmd_channel.send(embed=xp_embed)
         await cmd_channel.send(embed=admin_embed)
     except Exception as e:
@@ -2054,7 +2076,6 @@ async def bump(ctx: commands.Context):
         except (discord.Forbidden, discord.NotFound, discord.HTTPException): pass
         return await ctx.send(f"⚠️ {ctx.author.mention}, the `.bump` command can only be used in {bump_channel.mention}!", delete_after=6)
 
-    # Use lock to prevent double execution if user spams the command
     async with BUMP_LOCK:
         now = discord.utils.utcnow()
         if LAST_BUMP_TIME is not None:
@@ -2086,6 +2107,92 @@ async def bump(ctx: commands.Context):
     await ctx.send(embed=embed)
     await handle_level_up(ctx.author, prev_xp, new_total_xp, ctx.channel)
 
+# ------------------------------------------------------------------------------
+# TEAM MODERATION COMMANDS (Ban, Kick, Mute, Warn)
+# ------------------------------------------------------------------------------
+def parse_duration(duration_str: str) -> Optional[datetime.timedelta]:
+    match = re.match(r"^(\d+)([smhd])$", duration_str.lower())
+    if not match: return None
+    val = int(match.group(1))
+    unit = match.group(2)
+    if unit == 's': return datetime.timedelta(seconds=val)
+    if unit == 'm': return datetime.timedelta(minutes=val)
+    if unit == 'h': return datetime.timedelta(hours=val)
+    if unit == 'd': return datetime.timedelta(days=val)
+    return None
+
+@bot.command(name="ban")
+@is_team_authorized()
+async def ban(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided."):
+    if not can_moderate(ctx, member):
+        return await ctx.send("⛔ **Hierarchy Error:** You do not have permission to ban this member.", delete_after=5)
+    try:
+        await member.send(f"🔨 You have been **banned** from **{ctx.guild.name}**.\n**Reason:** {reason}")
+    except discord.Forbidden:
+        pass
+    await member.ban(reason=f"{ctx.author} (ID: {ctx.author.id}): {reason}")
+    await ctx.send(f"🔨 **{member}** has been successfully banned. \n**Reason:** {reason}")
+
+@bot.command(name="kick")
+@is_team_authorized()
+async def kick(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided."):
+    if not can_moderate(ctx, member):
+        return await ctx.send("⛔ **Hierarchy Error:** You do not have permission to kick this member.", delete_after=5)
+    try:
+        await member.send(f"👢 You have been **kicked** from **{ctx.guild.name}**.\n**Reason:** {reason}")
+    except discord.Forbidden:
+        pass
+    await member.kick(reason=f"{ctx.author} (ID: {ctx.author.id}): {reason}")
+    await ctx.send(f"👢 **{member}** has been successfully kicked. \n**Reason:** {reason}")
+
+@bot.command(name="mute", aliases=["timeout"])
+@is_team_authorized()
+async def mute(ctx: commands.Context, member: discord.Member, duration: str, *, reason: str = "No reason provided."):
+    if not can_moderate(ctx, member):
+        return await ctx.send("⛔ **Hierarchy Error:** You do not have permission to mute this member.", delete_after=5)
+    delta = parse_duration(duration)
+    if not delta:
+        return await ctx.send("⚠️ **Invalid duration format.** Use `10m`, `1h`, or `1d`.", delete_after=5)
+    until_time = discord.utils.utcnow() + delta
+    try:
+        await member.timeout(until_time, reason=f"{ctx.author} (ID: {ctx.author.id}): {reason}")
+        await ctx.send(f"🔇 **{member}** has been muted for **{duration}**. \n**Reason:** {reason}")
+    except discord.Forbidden:
+        await ctx.send("⚠️ **Permission Error:** Arkbot's role is not high enough to mute this user.", delete_after=5)
+
+@bot.command(name="unmute", aliases=["removetimeout"])
+@is_team_authorized()
+async def unmute(ctx: commands.Context, member: discord.Member, *, reason: str = "Manual Unmute."):
+    if not can_moderate(ctx, member):
+        return await ctx.send("⛔ **Hierarchy Error:** You do not have permission to unmute this member.", delete_after=5)
+    try:
+        await member.timeout(None, reason=f"{ctx.author} (ID: {ctx.author.id}): {reason}")
+        await ctx.send(f"🔊 **{member}** has been successfully unmuted.")
+    except discord.Forbidden:
+        await ctx.send("⚠️ **Permission Error:** Arkbot's role is not high enough to modify this user.", delete_after=5)
+
+@bot.command(name="warn")
+@is_team_authorized()
+async def warn(ctx: commands.Context, member: discord.Member, *, reason: str):
+    if not can_moderate(ctx, member):
+        return await ctx.send("⛔ **Hierarchy Error:** You do not have permission to warn this member.", delete_after=5)
+    try:
+        await member.send(f"⚠️ You have received a formal warning in **{ctx.guild.name}**.\n**Reason:** {reason}")
+    except discord.Forbidden:
+        pass
+    await ctx.send(f"⚠️ **{member}** has been officially warned. \n**Reason:** {reason}")
+    
+    if log_ch := await get_or_create_audit_channel(ctx.guild):
+        embed = discord.Embed(title="⚠️️ Member Warned", color=discord.Color.yellow(), timestamp=discord.utils.utcnow())
+        embed.add_field(name="Member", value=f"{member.mention} ({member.id})", inline=True)
+        embed.add_field(name="Moderator", value=f"{ctx.author.mention}", inline=True)
+        embed.add_field(name="Reason", value=reason, inline=False)
+        try: await log_ch.send(embed=embed)
+        except Exception: pass
+
+# ------------------------------------------------------------------------------
+# OTHER GENERAL COMMANDS
+# ------------------------------------------------------------------------------
 @bot.command(name="setbirthday", aliases=["setbday", "updatebday", "updatebirthday"])
 @commands.has_permissions(administrator=True)
 async def set_birthday(ctx: commands.Context, member: discord.Member, dob: str):
@@ -2184,7 +2291,7 @@ async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
     
     embed = discord.Embed(
         title="✨ XP Manually Granted",
-        description=f"Successfully added **+{amount:,} XP** to {member.mention}!\n\n📊 **Total XP:** `{new_xp:,} XP`\n🎖️ **Level:** `Level {new_lvl}` " + (f"*(Ranked up from Level {old_lvl}!)*" if new_lvl > old_lvl else "") + f"\n🛡️ **Current Tier:** {current_tier_role.mention if current_tier_role else '`None`'}",
+        description=f"Successfully added **+{amount:,} XP** to {member.mention}!\n\n📊 **Total XP:** `{new_xp:,} XP`\n🎖️️ **Level:** `Level {new_lvl}` " + (f"*(Ranked up from Level {old_lvl}!)*" if new_lvl > old_lvl else "") + f"\n🛡️ **Current Tier:** {current_tier_role.mention if current_tier_role else '`None`'}",
         color=discord.Color.green(), timestamp=discord.utils.utcnow(),
     )
     embed.set_thumbnail(url=member.display_avatar.url)
@@ -2277,7 +2384,7 @@ async def unlock_channel(ctx: commands.Context, channel: Optional[discord.TextCh
 async def hide_channel(ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
     target = channel or ctx.channel
     await target.set_permissions(ctx.guild.default_role, view_channel=False, reason=f"Hidden by {ctx.author}")
-    await ctx.send(f"👁️‍🗨️ {target.mention} is now hidden from standard members.")
+    await ctx.send(f"👁️‍‍🗨️ {target.mention} is now hidden from standard members.")
 
 @bot.command(name="show")
 @is_authority_holder()
