@@ -29,16 +29,26 @@ STATE_FILE = "bot_runtime_state.json"
 XP_DATABASE_FILE = "user_xp.json"
 BIRTHDAYS_FILE = "birthdays.json"
 CONFESSIONS_FILE = "confessions.json"
+BANNED_EMOJIS_FILE = "banned_emojis.json"
+WARNINGS_FILE = "warnings.json"
+ATTENDANCE_FILE = "attendance.json"
 MASTER_BACKUP_TEMPLATE = "master_backup_{guild_id}.json"
 
 # In-memory caches & state
 AFK_USERS: Dict[int, Dict[str, Any]] = {}
+ON_LEAVE_USERS: Dict[int, Dict[str, Any]] = {}
 LAST_BUMP_TIME: Optional[datetime.datetime] = None
 BUMP_TIMER_TASK: Optional[asyncio.Task] = None
 BUMP_LOCK = asyncio.Lock()
 BUMP_COOLDOWN_SECONDS = 7200  # 2 Hours
+
 ANNOUNCED_BIRTHDAYS_TODAY: List[int] = []
 REMINDED_BIRTHDAYS_TOMORROW: List[int] = []
+PROMPTED_ATTENDANCE_TODAY: set = set()
+
+BANNED_EMOJIS: List[str] = []
+WARNINGS: Dict[str, int] = {}
+STAFF_ATTENDANCE: Dict[str, str] = {}
 
 # Chat Revive State & Cooldowns
 LAST_REVIVE_TIME: Dict[int, float] = {}
@@ -85,113 +95,42 @@ LEVEL_TIERS: List[Tuple[int, str]] = [
 
 COLOR_ROLES = ["Red", "Yellow", "Green", "Blue", "Orange", "Pink"]
 
-# --- DYNAMIC MESSAGE PRESETS (15 EACH) ---
 AFK_PRESET_MESSAGES = [
     "💔 Slipping away into the quiet shadows... see you when the world feels softer.",
     "🌧️ Wandering through quiet echoes and lonely thoughts. Leaving sweet love behind while I'm away.",
     "🥀 Drifting away to let a tired heart rest. Please keep my memories warm until I return.",
     "🌙 Disappearing into the silent twilight... sending tender hugs across the distance.",
     "🍂 Drifting into solitude for a little while. Missing you all already.",
-    "🖤 Floating where the silence feels gentler. Be back soon, don't forget me.",
-    "✨ Tucking away in my quiet sanctuary with fond thoughts of you all.",
-    "🥺 Stepping into the quiet mist to breathe alone for a bit. Catch you later, lovely souls.",
-    "🕊️ Seeking peace in quiet solitude. Leaving warm whispers of affection behind.",
-    "🌧️ Drifting into silent solitude to heal and recharge. Keep a warm thought for me.",
-    "☁️ Lost in the clouds for a bit. Keep the chat warm for me.",
-    "🕰️ Stepping out of time for a moment. See you on the other side.",
-    "🎧 Lost in the music and away from the keyboard. Be right back.",
-    "🌌 Stargazing in my own little world... I'll return when the stars align.",
-    "🍃 Gone with the wind. Catch you all when it brings me back."
+    "🖤 Floating where the silence feels gentler. Be back soon, don't forget me."
 ]
 
 AFK_WELCOME_MESSAGES = [
     "☀️ You're back! The entire room just lit up. Welcome back, {user}!",
     "💖 Welcome back, {user}! The server felt far too quiet without your energy!",
     "🎉 Look who returned! We missed you so much, {user}!",
-    "🥳 You're finally back! Everything feels complete again. Welcome home, {user}!",
-    "✨ Warmest welcome back, {user}! So genuinely happy to see you chatting again!",
-    "💫 The stars have realigned, {user} is back! Welcome!",
-    "✨ Yay, {user} returned! We were just talking about how much we missed you.",
-    "🌸 The garden feels alive again! Welcome back to the chat, {user}.",
-    "🚀 Touchdown! {user} has safely landed back in Chill-Verse.",
-    "🎉 Let's go! {user} is finally off AFK. We missed your vibe!",
-    "🌟 Look who decided to grace us with their presence! Welcome back, {user}!",
-    "☕ Hope you had a great break, {user}! Grab a seat and catch up.",
-    "🦋 The chat is instantly better now that {user} is here. Welcome back!",
-    "🥳 Ring the alarm! {user} has returned to the sanctuary!",
-    "💖 There you are, {user}! The server wasn't the same without you."
+    "🥳 You're finally back! Everything feels complete again. Welcome home, {user}!"
 ]
 
 BUMP_PRESET_MESSAGES = [
     "🚀 **Server Bumped!** Chill-Verse has been blasted into the cosmos! Thank you for supporting the community.",
     "🌟 **Boom!** Your bump sent shockwaves across Discord! Our sanctuary continues to flourish.",
     "💖 **Bump Successful!** Spreading the warmth of Chill-Verse far and wide. You're an absolute legend!",
-    "🔥 **Rising Higher!** Thanks to your bump, Chill-Verse is shining brighter than ever on the server boards.",
-    "🎉 **Bump Power Activated!** You just put Chill-Verse back at the top. The entire team appreciates you!",
-    "✨ **Pure Magic!** Chill-Verse was boosted through the clouds! Keep the amazing vibes rolling.",
-    "🛡️ **Honor to the Realm!** Your dedication keeps our gates open and thriving. Outstanding bump!",
-    "🎈 **Soaring Upward!** Another bump, another milestone reached. You made our community proud today!",
-    "⚡ **Volt of Energy!** Chill-Verse just received an electrifying boost across Discord.",
-    "🌙 **Twilight Ascendance!** Our voices echo louder thanks to your bump. Thank you for showing love!",
-    "🌌 **Galactic Boost!** Chill-Verse is now orbiting at maximum altitude!",
-    "💥 **Impact!** Your bump just shattered the charts. We appreciate you!",
-    "👑 **Royalty Status!** Thank you for treating Chill-Verse like the kingdom it is.",
-    "🌊 **Tidal Wave!** A massive wave of support just hit the server thanks to your bump.",
-    "💎 **Flawless Victory!** You secured the bump and kept our community shining."
 ]
 
 BUMP_15M_MESSAGES = [
     "⏳ **15-Minute Alert!** The 2-hour cooldown is almost over. Stretch those fingers!",
     "🚀 **Pre-Launch Sequence!** Chill-Verse can be launched into the stars in just 15 minutes!",
-    "🛡️ **Heads up Guardians!** 15 minutes left until we can boost our sanctuary back to the summit.",
-    "✨ **Magic Gathering!** Only 15 minutes remain before the next bump cycle opens!",
-    "⚡ **Charging Energy!** 15 minutes until our next bump pulse goes live. Be ready to claim that +250 XP!",
-    "🔔 **Almost Time!** The cooldown timer is ticking down—15 minutes until the gates open!",
-    "💫 **Cosmic Alignment:** In 15 minutes, Chill-Verse will be eligible to bump again!",
-    "🔥 **Stoking the Fire!** 15 minutes left on the clock. Who is taking the XP crown this round?",
-    "🌟 **Starlight Alert!** Only 15 minutes to go before our next server boost is unlocked.",
-    "🎈 **Prepare for Liftoff!** 15 minutes on the countdown. Get your `.bump` command primed!",
-    "⏱️ **15 Minutes!** The hype train is leaving the station soon. Get ready!",
-    "👀 **Keep your eyes peeled!** Only 15 minutes left until the bump button works again.",
-    "⚔️ **Sharpen your swords!** The battle for the next +250 XP begins in 15 minutes.",
-    "🏎️ **Start your engines!** 15 minutes to go. Who will be the fastest to bump?",
-    "⏳ **The sands of time run low!** 15 minutes until Chill-Verse needs your boost."
 ]
 
 BUMP_READY_MESSAGES = [
     "🔔 **TIME TO BUMP!** The 2-hour cooldown is officially over! First to bump takes the **+250 XP**!",
     "🚀 **BUMP GATES OPEN!** Chill-Verse is ready for another boost! Run `.bump` right now!",
-    "⚡ **READY FOR ACTION!** The server needs your bump power! Claim your reward today!",
-    "🎉 **COOLDOWN FINISHED!** Boost our world to the top of Discord with `.bump`!",
-    "🌟 **THE STAGE IS YOURS!** It's time to bump! Show our community some love and grab that XP!",
-    "🛡️ **DEFENDERS ASSEMBLE!** The bump timer has cleared! Type `.bump` to push us higher!",
-    "🔥 **CHILL-VERSE IS READY!** Fire up your `.bump` command and claim the top booster spot!",
-    "🎈 **BUMP UNLOCKED!** Don't let the server wait—boost us up and take home your XP!",
-    "✨ **FRESH CYCLE STARTED!** The clock hit zero! Step up and drop a `.bump` in the chat!",
-    "💫 **BOOST WINDOW LIVE!** Let's make Chill-Verse shine across Discord again. Hit `.bump` now!",
-    "🚨 **GO GO GO!** The bump timer is clear! Claim your XP right now!",
-    "🔓 **VAULT UNLOCKED!** The bump cooldown is over. Boost us and grab the 250 XP!",
-    "🏆 **CHAMPION NEEDED!** Who will step up and `.bump` the server today?",
-    "🟢 **GREEN LIGHT!** We are clear for liftoff. Drop a `.bump` in the chat!",
-    "💥 **BOOM! Timer is at ZERO!** Send Chill-Verse to the top and take your reward!"
 ]
 
 REVIVE_ICEBREAKERS = [
     "If you could have any superpower for 24 hours, what would it be and why?",
     "What's your current favorite video game or series that you can't put down?",
     "If you could travel to any country tomorrow with everything paid for, where are you going?",
-    "What is the single best food to eat while binge-watching shows?",
-    "If you had to listen to only one music artist for an entire month, who is it?",
-    "What's an unpopular opinion you have that will make everyone in chat debate?",
-    "Coffee, Chai, Energy Drinks, or Cold Water? What fuels your day?",
-    "What was the most fun thing that happened to you this week?",
-    "If you could instantly master any language or musical instrument, which would you pick?",
-    "What is your all-time favorite movie that you can rewatch without getting bored?",
-    "If animals could talk, which species would be the rudest?",
-    "What's a movie that everyone loves but you actually secretly hate?",
-    "You can only eat one dessert for the rest of your life. What are you picking?",
-    "What is the weirdest habit you have when you are completely alone?",
-    "If you were forced to participate in a reality TV show, which one would you choose and why?"
 ]
 
 # ==============================================================================
@@ -292,7 +231,6 @@ def _write_file_sync(path: str, data: Any) -> None:
                 os.remove(temp_path)
             except OSError:
                 pass
-        print(f"[Storage Engine] Failed writing {path}: {e}")
 
 async def safe_read_json(path: str, default: Any) -> Any:
     async with FILE_LOCKS[path]:
@@ -379,6 +317,10 @@ async def persist_runtime_state():
             str(uid): {"reason": info["reason"], "time": info["time"].isoformat()}
             for uid, info in AFK_USERS.items()
         },
+        "on_leave_users": {
+            str(uid): {"reason": info["reason"], "time": info["time"].isoformat()}
+            for uid, info in ON_LEAVE_USERS.items()
+        },
         "announced_birthdays_today": ANNOUNCED_BIRTHDAYS_TODAY,
         "reminded_birthdays_tomorrow": REMINDED_BIRTHDAYS_TOMORROW,
         "maintenance_mode": MAINTENANCE_MODE,
@@ -386,8 +328,14 @@ async def persist_runtime_state():
     await safe_write_json(STATE_FILE, state)
 
 async def restore_runtime_state():
-    global LAST_BUMP_TIME, AFK_USERS, ANNOUNCED_BIRTHDAYS_TODAY, REMINDED_BIRTHDAYS_TOMORROW, MAINTENANCE_MODE
+    global LAST_BUMP_TIME, AFK_USERS, ON_LEAVE_USERS, ANNOUNCED_BIRTHDAYS_TODAY, REMINDED_BIRTHDAYS_TOMORROW, MAINTENANCE_MODE
+    global BANNED_EMOJIS, WARNINGS, STAFF_ATTENDANCE
+
     state = await safe_read_json(STATE_FILE, {})
+    BANNED_EMOJIS = await safe_read_json(BANNED_EMOJIS_FILE, [])
+    WARNINGS = await safe_read_json(WARNINGS_FILE, {})
+    STAFF_ATTENDANCE = await safe_read_json(ATTENDANCE_FILE, {})
+
     if not state:
         return
 
@@ -403,8 +351,17 @@ async def restore_runtime_state():
                 "reason": data.get("reason", "AFK"),
                 "time": datetime.datetime.fromisoformat(data["time"]),
             }
-        except Exception:
-            continue
+        except Exception: continue
+
+    raw_leave = state.get("on_leave_users", {})
+    ON_LEAVE_USERS.clear()
+    for uid_str, data in raw_leave.items():
+        try:
+            ON_LEAVE_USERS[int(uid_str)] = {
+                "reason": data.get("reason", "On Leave"),
+                "time": datetime.datetime.fromisoformat(data["time"]),
+            }
+        except Exception: continue
 
     ANNOUNCED_BIRTHDAYS_TODAY = state.get("announced_birthdays_today", [])
     REMINDED_BIRTHDAYS_TOMORROW = state.get("reminded_birthdays_tomorrow", [])
@@ -723,60 +680,6 @@ async def purge_all_old_backups(channel: discord.TextChannel):
         print(f"Failed purging old backups: {e}")
 
 # ==============================================================================
-# AUTO-CLEAN BOT NOTIFICATIONS & ALERTS ENGINE
-# ==============================================================================
-async def clear_all_bot_notifications(guild: discord.Guild):
-    """Clears all stale bot messages and alerts across control channels for a clean start."""
-    full_wipe_channels = [
-        "🚨・team-news", "team-news", "⏰・bump", "bump", "🧪・bot-testing", "bot-testing", "💼・bot-commands", "bot-commands",
-        "🛡️・team-rules", "team-rules", "🛡️・server-rules", "server-rules", "🎨・colours", "colours", "🎫・tickets", "tickets",
-        "🏷️・change-nickname", "change-nickname",
-    ]
-
-    for ch_name in full_wipe_channels:
-        ch = discord.utils.get(guild.text_channels, name=ch_name)
-        if ch:
-            try:
-                await ch.purge(limit=100, check=lambda m: m.author == guild.me)
-                await asyncio.sleep(0.2)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-
-    confession_ch = discord.utils.get(guild.text_channels, name="🚦・confession") or discord.utils.get(guild.text_channels, name="confessions")
-    if confession_ch:
-        try:
-            async for msg in confession_ch.history(limit=50):
-                if msg.author == guild.me and msg.embeds:
-                    if "Confession Box" in (msg.embeds[0].title or ""):
-                        await msg.delete()
-                        await asyncio.sleep(0.2)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-
-    bday_ch = discord.utils.get(guild.text_channels, name="🎂・birthdays") or discord.utils.get(guild.text_channels, name="birthdays")
-    if bday_ch:
-        try:
-            async for msg in bday_ch.history(limit=50):
-                if msg.author == guild.me and msg.embeds:
-                    title = msg.embeds[0].title or ""
-                    if any(kw in title for kw in ["Birthday Calendar & Registration", "UPCOMING BIRTHDAY ALERT", "HAPPY BIRTHDAY"]):
-                        await msg.delete()
-                        await asyncio.sleep(0.2)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-
-    announcement_ch = discord.utils.get(guild.text_channels, name="📢・announcements") or discord.utils.get(guild.text_channels, name="announcements")
-    if announcement_ch:
-        try:
-            async for msg in announcement_ch.history(limit=50):
-                if msg.author == guild.me and msg.embeds:
-                    if "Community Notification Preferences" in (msg.embeds[0].title or ""):
-                        await msg.delete()
-                        await asyncio.sleep(0.2)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-
-# ==============================================================================
 # UNIFIED SINGLE BACKUP & RESTORATION ENGINE
 # ==============================================================================
 async def generate_unified_backup_payload(guild: discord.Guild) -> Dict[str, Any]:
@@ -997,13 +900,30 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
         pass
 
 # ==============================================================================
-# UI COMPONENTS (NICKNAMES, XP DROPS, CONFESSIONS, COLOURS, TICKETS, BDAY)
+# UI COMPONENTS & MODALS
 # ==============================================================================
 async def _schedule_message_deletion(message: Optional[discord.Message], delay: float = 7.0):
     if not message: return
     await asyncio.sleep(delay)
     try: await message.delete()
     except (discord.NotFound, discord.HTTPException): pass
+
+class StaffAttendanceView(View):
+    def __init__(self): super().__init__(timeout=None)
+    @discord.ui.button(label="Mark Attendance 📅", style=discord.ButtonStyle.green, custom_id="persistent_mark_attendance")
+    async def mark_attendance(self, interaction: discord.Interaction, button: Button):
+        today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        uid_str = str(interaction.user.id)
+        
+        if not is_team_member(interaction.user):
+            return await interaction.response.send_message("⛔ You are not on the Staff Team.", ephemeral=True)
+            
+        if STAFF_ATTENDANCE.get(uid_str) == today_str:
+            return await interaction.response.send_message("✅ You have already marked your attendance for today!", ephemeral=True)
+            
+        STAFF_ATTENDANCE[uid_str] = today_str
+        await safe_write_json(ATTENDANCE_FILE, STAFF_ATTENDANCE)
+        await interaction.response.send_message("✅ Your attendance for today has been successfully recorded!", ephemeral=True)
 
 class NicknameModal(Modal, title="Update Server Nickname"):
     new_nick = TextInput(label="New Server Nickname", placeholder="Enter your new nickname (max 32 characters)...", required=True, max_length=32)
@@ -1025,7 +945,7 @@ class NicknameModal(Modal, title="Update Server Nickname"):
 
 class NicknamePanelView(View):
     def __init__(self): super().__init__(timeout=None)
-    @discord.ui.button(label="🏷️ Change Nickname", style=discord.ButtonStyle.primary, custom_id="persistent_change_nickname")
+    @discord.ui.button(label="🏷️️ Change Nickname", style=discord.ButtonStyle.primary, custom_id="persistent_change_nickname")
     async def change_nick_btn(self, interaction: discord.Interaction, button: Button):
         user_xp = await get_user_xp(interaction.user.id)
         lvl = calculate_level(user_xp)
@@ -1122,7 +1042,7 @@ class ConfessionModal(Modal, title="Submit Anonymous Confession"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         guild = await resolve_guild_context(interaction)
-        if not guild: return await interaction.followup.send("⚠️ Error: Server context could not be resolved.", ephemeral=True)
+        if not guild: return await interaction.followup.send("⚠️️ Error: Server context could not be resolved.", ephemeral=True)
         confession_ch = discord.utils.get(guild.text_channels, name="🚦・confession") or discord.utils.get(guild.text_channels, name="confessions")
         if not confession_ch: return await interaction.followup.send("⚠️ Confession channel not found!", ephemeral=True)
         confession_id = await record_confession(interaction.user.id, self.confession.value)
@@ -1222,7 +1142,7 @@ class NotificationRolesView(View):
                 await member.add_roles(target_role, reason="Notification opt-in")
                 await interaction.followup.send(f"🔔 Added: **{target_role.name}**", ephemeral=True)
         except discord.Forbidden:
-            await interaction.followup.send("⚠️ Permission denied modifying roles.", ephemeral=True)
+            await interaction.followup.send("⚠️️ Permission denied modifying roles.", ephemeral=True)
 
     @discord.ui.button(label="⏰ Bump Pings", style=discord.ButtonStyle.primary, custom_id="ping_bump")
     async def bump_ping(self, interaction: discord.Interaction, button: Button): await self.toggle_ping(interaction, "Bump Pings")
@@ -1372,7 +1292,6 @@ class AdminProfileModal(Modal):
         if not can_moderate(interaction, self.target) and interaction.user.id != self.target.id:
             return await interaction.followup.send("⛔ **Hierarchy Error:** You do not have permission to modify this user's profile.", ephemeral=True)
 
-        # Nickname logic
         nick_val = self.nickname.value.strip()
         if nick_val:
             try:
@@ -1382,7 +1301,6 @@ class AdminProfileModal(Modal):
             except discord.Forbidden:
                 msgs.append("⚠️ Missing permissions to modify nickname.")
                     
-        # Birthday logic
         bday_val = self.birthday.value.strip()
         if bday_val:
             dob_match = re.match(r"^(\d{1,2})[/\-.](\d{1,2})", bday_val)
@@ -1503,7 +1421,6 @@ class AdminModModal(Modal):
         else:
             await interaction.followup.send("⚠️ Invalid action typed.", ephemeral=True)
 
-
 class TargetUserSelect(discord.ui.UserSelect):
     def __init__(self, action_type: str):
         super().__init__(placeholder="Select a member...", min_values=1, max_values=1)
@@ -1543,7 +1460,6 @@ class AdminSystemSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
-        # Verify permissions internally
         if not getattr(interaction.user.guild_permissions, "administrator", False) and not any(r.name.lower() in ["supreme leader", "highness", "authority"] for r in interaction.user.roles):
             return await interaction.followup.send("⛔ **Restricted:** Only High Command can execute system actions.", ephemeral=True)
             
@@ -1619,7 +1535,7 @@ async def deploy_admin_panel(guild: discord.Guild):
     try:
         async for msg in ch.history(limit=25):
             if msg.author == guild.me and msg.embeds and "MASTER ADMIN CONTROL PANEL" in (msg.embeds[0].title or ""):
-                return # Prevent duplicates
+                return
     except Exception: pass
 
     embed = discord.Embed(
@@ -1780,7 +1696,7 @@ async def deploy_team_news_commands_panel(guild: discord.Guild, prefix: str = ".
     commands_embed.add_field(name="🧹 Channel Purge & Cleanup (Authority)", value=(f"`{prefix}purge <1-1000> [target]` — Bulk delete messages with user/bot/link filters.\n`{prefix}remove_bot_role <@role/@bot/all>` — Immediately cuts bot access from a room."), inline=False)
     commands_embed.add_field(name="🔒 Channel Security & Overrides (Authority)", value=(f"`{prefix}lock` / `{prefix}unlock` — Mutes or opens the current room for members.\n`{prefix}hide` / `{prefix}show` — Toggles channel visibility from standard members.\n`{prefix}permit <@user/@role>` — Whitelists a member or role into the channel.\n`{prefix}revoke <@user/@role>` — Evicts a member or role from the channel."), inline=False)
     commands_embed.add_field(name="⭐ XP Management & Spawners (Authority)", value=(f"`{prefix}addxp <@user> <amount>` — Grants XP and automatically recalculates rank roles.\n`{prefix}removexp <@user> <amount>` — Deducts XP and updates tier roles accordingly.\n`{prefix}setxp <@user> <amount>` — Sets exact XP and syncs corresponding rank roles.\n`{prefix}superdrop [amount] [#ch]` — Spawns a massive Super XP drop.\n`{prefix}xpdrop [amount] [#ch]` — Spawns a standard wild XP drop."), inline=False)
-    commands_embed.add_field(name="📢 Announcements & Community Pacing (Staff & Team)", value=(f"`{prefix}announce [optional #channel] <title> | <text> [--everyone/--here]` — Posts official announcement embeds.\n`{prefix}revive [optional topic]` — Pings the Chat Revive role with an icebreaker prompt.\n`{prefix}afk [reason]` — Sets an AFK status while moderating."), inline=False)
+    commands_embed.add_field(name="📢 Announcements & Community Pacing (Staff & Team)", value=(f"`{prefix}announce [optional #channel] <title> | <text> [--everyone/--here]` — Posts official announcement embeds.\n`{prefix}revive [optional topic]` — Pings the Chat Revive role with an icebreaker prompt.\n`{prefix}onleave [reason]` — Sets an On-Leave status for staff.\n`{prefix}banemoji <emoji>` — Bans an emoji from the server.\n`{prefix}unbanemoji <emoji>` — Unbans an emoji."), inline=False)
     commands_embed.set_footer(text=f"Prefix: {prefix} • Strictly restricted to Authority and Staff ranks")
     try: await team_news_ch.send(embed=commands_embed)
     except Exception as e: print(f"[Team News Deploy Error]: {e}")
@@ -1825,6 +1741,9 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     team_embed.add_field(name=f"`{prefix}mute <@user> <time> [reason]`", value="Times out a member (Format: `10m`, `1h`, `1d`).", inline=False)
     team_embed.add_field(name=f"`{prefix}unmute <@user> [reason]`", value="Removes an active timeout early.", inline=False)
     team_embed.add_field(name=f"`{prefix}warn <@user> <reason>`", value="DMs a formal warning and logs it to `📜・audit-logs`.", inline=False)
+    team_embed.add_field(name=f"`{prefix}banemoji <emoji>`", value="Bans an emoji from the server.", inline=False)
+    team_embed.add_field(name=f"`{prefix}clearwarns <@user>`", value="Clears all emoji warnings for a specific user.", inline=False)
+    team_embed.add_field(name=f"`{prefix}onleave [reason]`", value="Sets a DND/On Leave status specifically for staff.", inline=False)
 
     xp_embed = discord.Embed(title="⭐ 4. XP Engine & Manual Spawners", description="Tools to grant, modify, and manually spawn interactive XP drops:", color=discord.Color.gold())
     xp_embed.add_field(name=f"`{prefix}addxp <@user> <amount>`", value="Grants XP to a member and automatically upgrades rank tier roles.", inline=False)
@@ -1844,7 +1763,6 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     admin_embed.add_field(name=f"`{prefix}colours`", value="Deploys the cosmetic color selection panel in `🎨・colours`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_confession_panel`", value="Deploys the anonymous confession box in `🚦・confession`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_notifications`", value="Deploys optional community notification role buttons.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}setbirthday [@user] [DD/MM]`", value="Manually updates or sets a member's birthday.", inline=False)
     admin_embed.add_field(name=f"`{prefix}refresh_rules`", value="Refreshes guidelines in `#🛡️・team-rules` and command list in `#🚨・team-news`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}refresh_commands`", value="Refreshes this complete master manual in `#💼・bot-commands`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}backup_all`", value="Generates and overwrites the single unified master backup snapshot.", inline=False)
@@ -1874,7 +1792,6 @@ async def deploy_tickets_panel(guild: discord.Guild):
     except Exception: pass
 
 async def deploy_all_system_panels(guild: discord.Guild, prefix: str = "."):
-    """Runs and deploys every interface panel across the server in sequence."""
     await deploy_rules_panel(guild)
     await deploy_nickname_panel(guild)
     await deploy_team_rules_panel(guild)
@@ -1916,6 +1833,7 @@ class ArkBot(commands.Bot):
         self.add_view(BirthdayPanelView())
         self.add_view(NicknamePanelView())
         self.add_view(AdminMasterPanelView())
+        self.add_view(StaffAttendanceView())
 
         asyncio.create_task(self._auto_restore_all_guilds())
 
@@ -1923,6 +1841,7 @@ class ArkBot(commands.Bot):
         if not birthday_announcer_task.is_running(): birthday_announcer_task.start()
         if not xp_drop_task.is_running(): xp_drop_task.start()
         if not xp_flush_task.is_running(): xp_flush_task.start()
+        if not daily_attendance_check.is_running(): daily_attendance_check.start()
 
     async def _provision_blueprint_and_roles(self, guild: discord.Guild) -> Tuple[int, int]:
         created_channels = 0
@@ -2048,7 +1967,6 @@ async def check_maintenance_mode(ctx: commands.Context):
     await ctx.send("🛠️ **Maintenance Mode Active:** Non-administrative commands are temporarily disabled.", delete_after=6)
     return False
 
-
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} — Chill-Verse operational.")
@@ -2077,7 +1995,6 @@ async def on_ready():
                 try: await team_news_ch.send(embed=embed)
                 except Exception: pass
         UPDATE_NOTIFIED = True
-
 
 @bot.event
 async def on_message_delete(message: discord.Message):
@@ -2175,6 +2092,51 @@ async def on_message(message: discord.Message):
     if message.author.bot: return
     ctx = await bot.get_context(message)
 
+    # 1. Emoji Check & Escalate Warnings
+    # Only verify standard members (Bypass High Command)
+    author_roles = {r.name.lower().strip() for r in getattr(message.author, "roles", [])}
+    bypass_roles = {"supreme leader", "highness", "authority"}
+    if not bool(bypass_roles.intersection(author_roles)):
+        if BANNED_EMOJIS and any(emoji in message.content for emoji in BANNED_EMOJIS):
+            try: await message.delete()
+            except discord.HTTPException: pass
+            
+            uid_str = str(message.author.id)
+            WARNINGS[uid_str] = WARNINGS.get(uid_str, 0) + 1
+            warns = WARNINGS[uid_str]
+            await safe_write_json(WARNINGS_FILE, WARNINGS)
+            
+            if warns == 1 or warns == 2:
+                try: await message.author.send(f"⚠️ **Warning #{warns}:** You used a banned emoji in {message.guild.name}. Please refrain from using it.")
+                except discord.Forbidden: pass
+                await message.channel.send(f"⚠️ {message.author.mention}, that emoji is restricted! (Warning #{warns})", delete_after=5)
+            else:
+                if warns == 3: duration = datetime.timedelta(hours=1)
+                elif warns == 4: duration = datetime.timedelta(hours=2)
+                elif warns == 5: duration = datetime.timedelta(hours=24)
+                else: duration = datetime.timedelta(hours=42)
+                
+                try:
+                    await message.author.timeout(discord.utils.utcnow() + duration, reason=f"Repeated banned emoji usage (Warning #{warns})")
+                    await message.channel.send(f"🔇 {message.author.mention} has been temporarily muted for **{duration}** due to repeated banned emoji usage (Warning #{warns}).")
+                except discord.Forbidden:
+                    await message.channel.send(f"⚠️️ Could not mute {message.author.mention} due to role hierarchy, but they used a banned emoji!")
+            
+            if log_ch := await get_or_create_audit_channel(message.guild):
+                try: await log_ch.send(f"🚨 **Auto-Mod:** {message.author.mention} triggered a banned emoji warning (#{warns}). Action taken.")
+                except discord.HTTPException: pass
+            return
+
+    # 2. Staff Attendance Daily Reminder (Triggers if they speak in a Team channel)
+    if is_team_member(message.author) and message.channel.name in ["💬・team-chat", "team-chat", "🚨・team-news", "team-news"]:
+        today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        uid_str = str(message.author.id)
+        if STAFF_ATTENDANCE.get(uid_str) != today_str and message.author.id not in PROMPTED_ATTENDANCE_TODAY:
+            PROMPTED_ATTENDANCE_TODAY.add(message.author.id)
+            prompt_embed = discord.Embed(title="📅 Daily Attendance Required", description=f"{message.author.mention}, you haven't marked your attendance today! Please click the button below.", color=discord.Color.orange())
+            await message.channel.send(embed=prompt_embed, view=StaffAttendanceView(), delete_after=60)
+
+    # 3. AFK & On Leave Management
     if message.author.id in AFK_USERS and ctx.command and ctx.command.name == "afk":
         pass
     elif message.author.id in AFK_USERS:
@@ -2183,11 +2145,22 @@ async def on_message(message: discord.Message):
         welcome_embed = discord.Embed(description=random.choice(AFK_WELCOME_MESSAGES).format(user=message.author.mention), color=discord.Color.green())
         await message.channel.send(embed=welcome_embed, delete_after=10)
 
+    if message.author.id in ON_LEAVE_USERS and ctx.command and ctx.command.name == "onleave":
+        pass
+    elif message.author.id in ON_LEAVE_USERS:
+        del ON_LEAVE_USERS[message.author.id]
+        await persist_runtime_state()
+        leave_return_embed = discord.Embed(description=f"👋 Welcome back {message.author.mention}! Your **On Leave** status has been automatically removed.", color=discord.Color.green())
+        await message.channel.send(embed=leave_return_embed, delete_after=10)
+
     if message.mentions:
         for mentioned in message.mentions:
             if mentioned.id in AFK_USERS and mentioned.id != message.author.id:
                 afk_embed = discord.Embed(description=f"💤 **{mentioned.display_name} is currently AFK:**\n*{AFK_USERS[mentioned.id]['reason']}*", color=discord.Color.dark_purple())
                 await message.channel.send(embed=afk_embed, delete_after=10)
+            elif mentioned.id in ON_LEAVE_USERS and mentioned.id != message.author.id:
+                leave_embed = discord.Embed(description=f"🌴 **{mentioned.display_name} is currently On Leave:**\n*{ON_LEAVE_USERS[mentioned.id]['reason']}*", color=discord.Color.orange())
+                await message.channel.send(embed=leave_embed, delete_after=10)
 
     if isinstance(message.author, discord.Member) and not is_team_member(message.author):
         if INVITE_REGEX.search(message.content):
@@ -2281,6 +2254,51 @@ async def hourly_backup_task():
         try: await backup_channel.send(content="🔒 **Master Hourly Single Snapshot (Auto-Overwritten)**", file=file)
         except Exception: pass
 
+@tasks.loop(hours=24.0)
+async def daily_attendance_check():
+    """Daily check for 10 consecutive days of staff absence and attendance prompt reset."""
+    await bot.wait_until_ready()
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    today_str = today.strftime("%Y-%m-%d")
+    PROMPTED_ATTENDANCE_TODAY.clear()
+    
+    for guild in bot.guilds:
+        team_chat = discord.utils.get(guild.text_channels, name="💬・team-chat") or discord.utils.get(guild.text_channels, name="team-chat")
+        if team_chat:
+            embed = discord.Embed(title="📅 Daily Staff Attendance", description="Good day, Team! Please mark your attendance for today.\n\n*Note: Failure to mark attendance for 10 consecutive days will result in automatic removal from the team.*", color=discord.Color.blue())
+            try: await team_chat.send(embed=embed, view=StaffAttendanceView())
+            except Exception: pass
+
+        team_roles_names = {"head moderator", "moderator", "trial mod", "chill-verse team"} # High Command generally excluded from auto-kicks
+        team_roles = [r for r in guild.roles if r.name.lower().strip() in team_roles_names]
+        if not team_roles: continue
+
+        for member in guild.members:
+            if member.bot: continue
+            if not any(r in member.roles for r in team_roles): continue
+            
+            last_seen_str = STAFF_ATTENDANCE.get(str(member.id))
+            if not last_seen_str:
+                # First time seeing this member on the team, initialize to today.
+                STAFF_ATTENDANCE[str(member.id)] = today_str
+                continue
+                
+            try:
+                last_seen_date = datetime.datetime.strptime(last_seen_str, "%Y-%m-%d").date()
+                days_absent = (today - last_seen_date).days
+                if days_absent >= 10:
+                    roles_to_remove = [r for r in member.roles if r in team_roles and r < guild.me.top_role]
+                    if roles_to_remove:
+                        await member.remove_roles(*roles_to_remove, reason="Auto-Removal: 10 Days Absent")
+                        try: await member.send(f"⚠️ You have been automatically removed from the Staff Team in **{guild.name}** due to being completely inactive/absent for 10 consecutive days.")
+                        except discord.Forbidden: pass
+                        if audit_ch := await get_or_create_audit_channel(guild):
+                            await audit_ch.send(f"🚨 **Staff Auto-Demotion:** {member.mention} was removed from the team due to 10 days of absence.")
+            except ValueError:
+                STAFF_ATTENDANCE[str(member.id)] = today_str
+                
+    await safe_write_json(ATTENDANCE_FILE, STAFF_ATTENDANCE)
+
 @tasks.loop(hours=1.0)
 async def birthday_announcer_task():
     await bot.wait_until_ready()
@@ -2348,7 +2366,7 @@ async def about_bot(ctx: commands.Context):
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow()
     )
-    embed.add_field(name="👨‍💻 Bot Maintainer", value="`iamthesubhanahmed`", inline=True)
+    embed.add_field(name="👨‍‍💻 Bot Maintainer", value="`iamthesubhanahmed`", inline=True)
     embed.add_field(name="🏢 Company", value="**Tier3.pk**", inline=True)
     embed.add_field(name="👑 Server Owner", value=owner_mention, inline=True)
     
@@ -2494,6 +2512,42 @@ async def warn(ctx: commands.Context, member: discord.Member, *, reason: str):
         try: await log_ch.send(embed=embed)
         except Exception: pass
 
+@bot.command(name="banemoji")
+@is_authority_holder()
+async def banemoji(ctx: commands.Context, emoji: str):
+    global BANNED_EMOJIS
+    emoji_clean = emoji.strip()
+    if emoji_clean in BANNED_EMOJIS:
+        return await ctx.send(f"⚠️ The emoji {emoji_clean} is already banned.", delete_after=5)
+    
+    BANNED_EMOJIS.append(emoji_clean)
+    await safe_write_json(BANNED_EMOJIS_FILE, BANNED_EMOJIS)
+    await ctx.send(f"✅ The emoji {emoji_clean} has been successfully banned from the server.")
+
+@bot.command(name="unbanemoji")
+@is_authority_holder()
+async def unbanemoji(ctx: commands.Context, emoji: str):
+    global BANNED_EMOJIS
+    emoji_clean = emoji.strip()
+    if emoji_clean not in BANNED_EMOJIS:
+        return await ctx.send(f"⚠️ The emoji {emoji_clean} is not in the banned list.", delete_after=5)
+    
+    BANNED_EMOJIS.remove(emoji_clean)
+    await safe_write_json(BANNED_EMOJIS_FILE, BANNED_EMOJIS)
+    await ctx.send(f"✅ The emoji {emoji_clean} has been removed from the banned list.")
+
+@bot.command(name="clearwarns")
+@is_authority_holder()
+async def clearwarns(ctx: commands.Context, member: discord.Member):
+    global WARNINGS
+    uid_str = str(member.id)
+    if uid_str in WARNINGS:
+        del WARNINGS[uid_str]
+        await safe_write_json(WARNINGS_FILE, WARNINGS)
+        await ctx.send(f"✅ All warnings cleared for {member.mention}.")
+    else:
+        await ctx.send(f"✅ {member.mention} has no warnings to clear.")
+
 # ------------------------------------------------------------------------------
 # OTHER GENERAL COMMANDS
 # ------------------------------------------------------------------------------
@@ -2595,7 +2649,7 @@ async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
     
     embed = discord.Embed(
         title="✨ XP Manually Granted",
-        description=f"Successfully added **+{amount:,} XP** to {member.mention}!\n\n📊 **Total XP:** `{new_xp:,} XP`\n🎖️️ **Level:** `Level {new_lvl}` " + (f"*(Ranked up from Level {old_lvl}!)*" if new_lvl > old_lvl else "") + f"\n🛡️ **Current Tier:** {current_tier_role.mention if current_tier_role else '`None`'}",
+        description=f"Successfully added **+{amount:,} XP** to {member.mention}!\n\n📊 **Total XP:** `{new_xp:,} XP`\n🎖 **Level:** `Level {new_lvl}` " + (f"*(Ranked up from Level {old_lvl}!)*" if new_lvl > old_lvl else "") + f"\n🛡️ **Current Tier:** {current_tier_role.mention if current_tier_role else '`None`'}",
         color=discord.Color.green(), timestamp=discord.utils.utcnow(),
     )
     embed.set_thumbnail(url=member.display_avatar.url)
@@ -2764,7 +2818,7 @@ async def announce(ctx: commands.Context, *, raw_content: Optional[str] = None):
 async def purge(ctx: commands.Context, amount: int = 10, target: Optional[Union[discord.Member, str]] = None):
     if amount < 1 or amount > 1000: return await ctx.send("⚠️ Specify a message count between 1 and 1,000.", delete_after=5)
     try: await ctx.message.delete()
-    except (discord.Forbidden, discord.NotFound, discord.HTTPException): pass
+    except discord.HTTPException: pass
 
     def purge_check(m: discord.Message) -> bool:
         if m.pinned: return False
@@ -2775,25 +2829,11 @@ async def purge(ctx: commands.Context, amount: int = 10, target: Optional[Union[
             if t_lower in ["link", "links"]: return bool(INVITE_REGEX.search(m.content) or "http://" in m.content.lower() or "https://" in m.content.lower())
         return True
 
-    deleted_total, cutoff = 0, discord.utils.utcnow() - datetime.timedelta(days=14)
-    while deleted_total < amount:
-        batch_limit = min(amount - deleted_total, 100)
-        deleted_batch = await ctx.channel.purge(limit=batch_limit, check=purge_check, after=cutoff)
-        deleted_total += len(deleted_batch)
-        if len(deleted_batch) < batch_limit: break
-        await asyncio.sleep(0.5)
-
-    if deleted_total < amount:
-        async for old_msg in ctx.channel.history(limit=min((amount - deleted_total) * 4, 300), before=cutoff):
-            if deleted_total >= amount: break
-            if purge_check(old_msg):
-                try:
-                    await old_msg.delete()
-                    deleted_total += 1
-                    await asyncio.sleep(0.3)
-                except (discord.NotFound, discord.HTTPException): pass
-
-    await ctx.send(f"🧹 Cleared **{deleted_total}** message(s) {f'from {target.mention}' if isinstance(target, discord.Member) else (f'matching `{target}`' if target else '')}.", delete_after=4)
+    try:
+        deleted = await ctx.channel.purge(limit=amount, check=purge_check)
+        await ctx.send(f"🧹 Cleared **{len(deleted)}** message(s).", delete_after=4)
+    except Exception as e:
+        await ctx.send(f"⚠️ Purge failed: {e}", delete_after=5)
 
 @bot.command(name="clean_start", aliases=["clear_notifications", "clear_notifs", "clearnotifications"])
 @commands.has_permissions(administrator=True)
@@ -2885,6 +2925,17 @@ async def afk(ctx: commands.Context, *, reason: Optional[str] = None):
     await persist_runtime_state()
     embed = discord.Embed(description=f"🌙 **{ctx.author.display_name} is now AFK**\n*{selected_status}*", color=discord.Color.purple())
     await ctx.send(embed=embed, delete_after=10)
+    try: await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException): pass
+
+@bot.command(name="onleave")
+@is_team_authorized()
+async def on_leave(ctx: commands.Context, *, reason: Optional[str] = None):
+    selected_status = reason.strip() if reason else "On official break/leave."
+    ON_LEAVE_USERS[ctx.author.id] = {"reason": selected_status, "time": discord.utils.utcnow()}
+    await persist_runtime_state()
+    embed = discord.Embed(description=f"🌴 **{ctx.author.display_name} is now On Leave**\n*{selected_status}*\nWill be unavailable for standard moderation duties.", color=discord.Color.orange())
+    await ctx.send(embed=embed, delete_after=15)
     try: await ctx.message.delete()
     except (discord.Forbidden, discord.NotFound, discord.HTTPException): pass
 
@@ -3012,6 +3063,7 @@ async def shutdown(ctx: commands.Context, *, reason: str = "Scheduled system mai
     if birthday_announcer_task.is_running(): birthday_announcer_task.cancel()
     if xp_drop_task.is_running(): xp_drop_task.cancel()
     if xp_flush_task.is_running(): xp_flush_task.cancel()
+    if daily_attendance_check.is_running(): daily_attendance_check.cancel()
 
     await asyncio.sleep(1.0)
     await bot.close()
