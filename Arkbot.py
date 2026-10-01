@@ -441,6 +441,7 @@ def can_moderate(ctx: Union[commands.Context, discord.Interaction], target: disc
     author = ctx.user if isinstance(ctx, discord.Interaction) else ctx.author
     guild = ctx.guild
     if not guild or not author or not target: return False
+    
     if target.top_role >= author.top_role and author.id != guild.owner_id: return False
     if target.top_role >= guild.me.top_role: return False
     if target.id == guild.owner_id or target.id == author.id: return False
@@ -708,20 +709,27 @@ async def generate_unified_backup_payload(guild: discord.Guild) -> Dict[str, Any
         "user_xp": XP_CACHE.copy(),
         "user_birthdays": await load_birthdays(),
         "confessions": await safe_read_json(CONFESSIONS_FILE, {"last_id": 0, "entries": []}),
+        "banned_emojis": BANNED_EMOJIS,
+        "warnings": WARNINGS,
+        "staff_attendance": STAFF_ATTENDANCE,
         "last_bump_time": LAST_BUMP_TIME.timestamp() if LAST_BUMP_TIME else None,
     }
 
-async def apply_unified_restore(guild: discord.Guild, data: Dict[str, Any]) -> Dict[str, int]:
+async def apply_unified_restore(guild: discord.Guild, data: Dict[str, Any], is_manual_rollback: bool = False) -> Dict[str, int]:
     global SERVER_BLUEPRINT, LAST_BUMP_TIME, XP_CACHE, XP_CACHE_DIRTY
     stats = {"channels_created": 0, "perms_applied": 0, "perms_skipped": 0, "xp_users": 0, "birthdays": 0, "confessions": 0}
 
     saved_blueprint = data.get("blueprint")
     if saved_blueprint and isinstance(saved_blueprint, list): SERVER_BLUEPRINT = saved_blueprint
 
+    # 1. HARD RESTORE: XP Profiles
     raw_xp = data.get("user_xp") or {}
     if raw_xp:
+        if is_manual_rollback: XP_CACHE.clear()
         for uid, xp_val in raw_xp.items():
-            try: XP_CACHE[str(uid)] = max(XP_CACHE.get(str(uid), 0), int(xp_val))
+            try:
+                if is_manual_rollback: XP_CACHE[str(uid)] = int(xp_val)
+                else: XP_CACHE[str(uid)] = max(XP_CACHE.get(str(uid), 0), int(xp_val))
             except (ValueError, TypeError): continue
         XP_CACHE_DIRTY = True
         stats["xp_users"] = len(raw_xp)
@@ -731,30 +739,60 @@ async def apply_unified_restore(guild: discord.Guild, data: Dict[str, Any]) -> D
                 if member := guild.get_member(int(uid_str)): await sync_member_level_roles(member, xp_val)
             except Exception: pass
 
-    if raw_bdays := data.get("user_birthdays"):
-        curr_bdays = await load_birthdays()
-        curr_bdays.update(raw_bdays)
-        await save_birthdays(curr_bdays)
-        stats["birthdays"] = len(curr_bdays)
+    # 2. HARD RESTORE: Birthdays
+    if "user_birthdays" in data:
+        raw_bdays = data["user_birthdays"]
+        if is_manual_rollback:
+            await save_birthdays(raw_bdays)
+        else:
+            curr_bdays = await load_birthdays()
+            curr_bdays.update(raw_bdays)
+            await save_birthdays(curr_bdays)
+        stats["birthdays"] = len(raw_bdays)
 
-    if (raw_confessions := data.get("confessions")) and isinstance(raw_confessions, dict):
-        curr_confessions = await safe_read_json(CONFESSIONS_FILE, {"last_id": 0, "entries": []})
-        merged_last_id = max(curr_confessions.get("last_id", 0), raw_confessions.get("last_id", 0))
-        existing_ids = {e["id"] for e in curr_confessions.get("entries", []) if isinstance(e, dict) and "id" in e}
-        combined_entries = list(curr_confessions.get("entries", []))
+    # 3. HARD RESTORE: Confessions
+    if "confessions" in data:
+        raw_confessions = data["confessions"]
+        if is_manual_rollback:
+            await safe_write_json(CONFESSIONS_FILE, raw_confessions)
+            stats["confessions"] = len(raw_confessions.get("entries", []))
+        else:
+            curr_confessions = await safe_read_json(CONFESSIONS_FILE, {"last_id": 0, "entries": []})
+            merged_last_id = max(curr_confessions.get("last_id", 0), raw_confessions.get("last_id", 0))
+            existing_ids = {e["id"] for e in curr_confessions.get("entries", []) if isinstance(e, dict) and "id" in e}
+            combined_entries = list(curr_confessions.get("entries", []))
+            for entry in raw_confessions.get("entries", []):
+                if isinstance(entry, dict) and entry.get("id") not in existing_ids:
+                    combined_entries.append(entry)
+                    existing_ids.add(entry["id"])
+            await safe_write_json(CONFESSIONS_FILE, {"last_id": merged_last_id, "entries": combined_entries})
+            stats["confessions"] = len(combined_entries)
 
-        for entry in raw_confessions.get("entries", []):
-            if isinstance(entry, dict) and entry.get("id") not in existing_ids:
-                combined_entries.append(entry)
-                existing_ids.add(entry["id"])
+    # 4. HARD RESTORE: Sub-Systems (Emojis, Warnings, Attendance)
+    if "banned_emojis" in data:
+        global BANNED_EMOJIS
+        if is_manual_rollback: BANNED_EMOJIS = data["banned_emojis"]
+        else: BANNED_EMOJIS = list(set(BANNED_EMOJIS + data["banned_emojis"]))
+        await safe_write_json(BANNED_EMOJIS_FILE, BANNED_EMOJIS)
 
-        await safe_write_json(CONFESSIONS_FILE, {"last_id": merged_last_id, "entries": combined_entries})
-        stats["confessions"] = len(combined_entries)
+    if "warnings" in data:
+        global WARNINGS
+        if is_manual_rollback: WARNINGS = data["warnings"]
+        else:
+            for k, v in data["warnings"].items(): WARNINGS[k] = max(WARNINGS.get(k, 0), v)
+        await safe_write_json(WARNINGS_FILE, WARNINGS)
+
+    if "staff_attendance" in data:
+        global STAFF_ATTENDANCE
+        if is_manual_rollback: STAFF_ATTENDANCE = data["staff_attendance"]
+        else: STAFF_ATTENDANCE.update(data["staff_attendance"])
+        await safe_write_json(ATTENDANCE_FILE, STAFF_ATTENDANCE)
 
     if raw_bump := data.get("last_bump_time"):
         LAST_BUMP_TIME = datetime.datetime.fromtimestamp(raw_bump, datetime.timezone.utc)
         await persist_runtime_state()
 
+    # 5. RESTORE: Channels & Permissions
     existing_cats = {normalize_name(c.name): c for c in guild.categories}
     for cat_data in data.get("categories", []):
         norm_cat = normalize_name(cat_data["name"])
@@ -1146,7 +1184,7 @@ class TeamApplicationModal(Modal, title="Staff Team Application"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         guild = await resolve_guild_context(interaction)
-        if not guild: return await interaction.followup.send("⚠️ Error: Server context not found.", ephemeral=True)
+        if not guild: return await interaction.followup.send("⚠️️ Error: Server context not found.", ephemeral=True)
         team_channel = discord.utils.get(guild.text_channels, name="💬・team-chat") or discord.utils.get(guild.text_channels, name="team-news")
         embed = discord.Embed(title="🚨 New Staff Application Submitted", color=discord.Color.gold(), timestamp=discord.utils.utcnow())
         embed.add_field(name="Applicant", value=interaction.user.mention, inline=False)
@@ -1365,7 +1403,7 @@ class AdminModModal(Modal):
             try:
                 await self.target.timeout(until, reason=f"{interaction.user}: {reason}")
                 await interaction.followup.send(f"✅ **{self.target.display_name}** has been muted for {duration_str}.", ephemeral=True)
-            except discord.Forbidden: await interaction.followup.send("⚠️️ Permission Error: Arkbot cannot timeout this user.", ephemeral=True)
+            except discord.Forbidden: await interaction.followup.send("⚠️ Permission Error: Arkbot cannot timeout this user.", ephemeral=True)
             
         elif action in ["unmute", "removetimeout"]:
             try:
@@ -1418,7 +1456,8 @@ class AdminSystemSelect(discord.ui.Select):
         options = [
             discord.SelectOption(label="Deploy / Refresh UI Panels", emoji="🖥️", value="deploy_panels", description="Redeploys all server interface panels."),
             discord.SelectOption(label="Force Master Backup", emoji="💾", value="backup", description="Generates a master system backup immediately."),
-            discord.SelectOption(label="Execute Clean Start", emoji="🧹", value="clean_start", description="Purges stale bot messages and redeploys.")
+            discord.SelectOption(label="Execute Clean Start", emoji="🧹", value="clean_start", description="Purges stale bot messages and redeploys."),
+            discord.SelectOption(label="Toggle Maintenance Mode", emoji="🛠️", value="maintenance", description="Locks/Unlocks commands for regular members.")
         ]
         super().__init__(placeholder="⚙️ Select a System Action...", min_values=1, max_values=1, options=options, custom_id="persistent_admin_system_select")
 
@@ -1444,6 +1483,32 @@ class AdminSystemSelect(discord.ui.Select):
             await clear_all_bot_notifications(interaction.guild)
             await deploy_all_system_panels(interaction.guild, ".")
             await interaction.followup.send("🧹 Clean start executed. Bot caches purged and panels refreshed.", ephemeral=True)
+        elif choice == "maintenance":
+            global MAINTENANCE_MODE
+            MAINTENANCE_MODE = not MAINTENANCE_MODE
+            await persist_runtime_state()
+
+            if MAINTENANCE_MODE:
+                if xp_drop_task.is_running(): xp_drop_task.cancel()
+                if daily_attendance_check.is_running(): daily_attendance_check.cancel()
+                if birthday_announcer_task.is_running(): birthday_announcer_task.cancel()
+                if hourly_backup_task.is_running(): hourly_backup_task.cancel()
+                
+                payload = await generate_unified_backup_payload(interaction.guild)
+                await safe_write_json(MASTER_BACKUP_TEMPLATE.format(guild_id=interaction.guild.id), payload)
+                err_channel = discord.utils.get(interaction.guild.text_channels, name="🩸・bot-errors") or discord.utils.get(interaction.guild.text_channels, name="bot-errors")
+                if err_channel:
+                    await purge_all_old_backups(err_channel)
+                    file_stream = io.BytesIO(json.dumps(payload, indent=4).encode("utf-8"))
+                    await err_channel.send(content="🔒 **Maintenance Triggered Backup Snapshot**", file=discord.File(file_stream, filename=f"master_backup_{interaction.guild.id}.json"))
+                
+                await interaction.followup.send("🛠️ **Maintenance Mode ON.** Full backup complete. All automated tasks paused and normal members are locked out.", ephemeral=True)
+            else:
+                if not xp_drop_task.is_running(): xp_drop_task.start()
+                if not daily_attendance_check.is_running(): daily_attendance_check.start()
+                if not birthday_announcer_task.is_running(): birthday_announcer_task.start()
+                if not hourly_backup_task.is_running(): hourly_backup_task.start()
+                await interaction.followup.send("✅ **Maintenance Mode OFF.** Background tasks resumed and standard operations unlocked.", ephemeral=True)
 
 class AdminMasterPanelView(View):
     def __init__(self):
@@ -1470,7 +1535,7 @@ class AdminMasterPanelView(View):
         if await self.check_perms(interaction, is_high_command=True):
             await interaction.response.send_message("Select a target user for XP management:", view=AdminTargetSelectView("xp"), ephemeral=True)
 
-    @discord.ui.button(label="Quick Mod", style=discord.ButtonStyle.danger, custom_id="persistent_admin_mod", emoji="🛡️️", row=1)
+    @discord.ui.button(label="Quick Mod", style=discord.ButtonStyle.danger, custom_id="persistent_admin_mod", emoji="🛡️", row=1)
     async def quick_mod(self, interaction: discord.Interaction, button: Button):
         if await self.check_perms(interaction):
             await interaction.response.send_message("Select a target user to moderate (Warn / Mute / Ban / Kick):", view=AdminTargetSelectView("mod"), ephemeral=True)
@@ -1479,9 +1544,7 @@ class AdminMasterPanelView(View):
     async def manage_emojis(self, interaction: discord.Interaction, button: Button):
         if await self.check_perms(interaction, is_high_command=True):
             await interaction.response.send_modal(AdminEmojiModal())
-
-
-# ==============================================================================
+            # ==============================================================================
 # PANEL DEPLOYERS
 # ==============================================================================
 async def deploy_admin_panel(guild: discord.Guild):
@@ -1499,7 +1562,7 @@ async def deploy_admin_panel(guild: discord.Guild):
                      "• **Modify Profile:** Change nicknames & birthdays directly.\n"
                      "• **Manage XP:** Add, remove, or set exact XP amounts.\n"
                      "• **Quick Mod:** Warn, mute, kick, and ban users natively.\n"
-                     "• **Manage Emojis:** Ban or unban emojis from the server.\n"
+                     "• **Manage Emojis:** Ban, unban, or view blacklisted emojis.\n"
                      "• **System Actions:** Trigger cleanups, backups, and maintenance."),
         color=discord.Color.dark_theme(),
     )
@@ -1737,17 +1800,6 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     except Exception as e:
         print(f"[Bot Commands Deploy Error]: {e}")
 
-async def deploy_tickets_panel(guild: discord.Guild):
-    ch = discord.utils.get(guild.text_channels, name="🎫・tickets")
-    if not ch: return
-    try:
-        async for msg in ch.history(limit=25):
-            if msg.author == guild.me and msg.embeds and "Support & Staff Applications" in (msg.embeds[0].title or ""): return
-    except Exception: pass
-    embed = discord.Embed(title="🎫 Chill-Verse Support & Staff Applications", description="Need staff assistance, want to report an issue, or apply for Team?\n\nChoose an option below:", color=discord.Color.blue())
-    try: await ch.send(embed=embed, view=TicketView())
-    except Exception: pass
-
 async def deploy_all_system_panels(guild: discord.Guild, prefix: str = "."):
     await deploy_rules_panel(guild)
     await deploy_nickname_panel(guild)
@@ -1760,7 +1812,6 @@ async def deploy_all_system_panels(guild: discord.Guild, prefix: str = "."):
     await deploy_birthday_panel(guild)
     await deploy_notifications_panel(guild)
     await deploy_admin_panel(guild)
-
 
 # ==============================================================================
 # SUBCLASSED BOT ENGINE
@@ -1863,7 +1914,7 @@ class ArkBot(commands.Bot):
                         boot_backup = remote_backup
 
                 if boot_backup:
-                    stats = await apply_unified_restore(guild, boot_backup)
+                    stats = await apply_unified_restore(guild, boot_backup, is_manual_rollback=False)
                     print(f"[Auto-Boot] Restored {stats['channels_created']} channels, {stats['xp_users']} XP profiles, {stats['birthdays']} birthdays, {stats['confessions']} confessions in {guild.name}.")
                 else:
                     for uid_str, xp_val in XP_CACHE.items():
@@ -2181,7 +2232,6 @@ async def on_message(message: discord.Message):
 
     await bot.process_commands(message)
 
-
 # ==============================================================================
 # AUTOMATED TASKS
 # ==============================================================================
@@ -2227,6 +2277,7 @@ async def hourly_backup_task():
 
 @tasks.loop(hours=24.0)
 async def daily_attendance_check():
+    """Daily check for 10 consecutive days of staff absence and attendance prompt reset."""
     await bot.wait_until_ready()
     today = datetime.datetime.now(datetime.timezone.utc).date()
     today_str = today.strftime("%Y-%m-%d")
@@ -2362,7 +2413,7 @@ async def spawn_admin_panel(ctx: commands.Context):
                      "• **Modify Profile:** Change nicknames & birthdays directly.\n"
                      "• **Manage XP:** Add, remove, or set exact XP amounts.\n"
                      "• **Quick Mod:** Warn, mute, kick, and ban users natively.\n"
-                     "• **Manage Emojis:** Ban or unban emojis from the server.\n"
+                     "• **Manage Emojis:** Ban, unban, or view blacklisted emojis.\n"
                      "• **System Actions:** Trigger cleanups, backups, and maintenance."),
         color=discord.Color.dark_theme(),
     )
@@ -2376,7 +2427,7 @@ async def check_attendance(ctx: commands.Context):
     team_roles_names = {"head moderator", "moderator", "trial mod", "chill-verse team", "supreme leader", "highness", "authority"}
     team_roles = [r for r in ctx.guild.roles if r.name.lower().strip() in team_roles_names]
     if not team_roles:
-        return await ctx.send("⚠️️ No staff roles found to check.", delete_after=5)
+        return await ctx.send("⚠ No staff roles found to check.", delete_after=5)
 
     today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     today_date = datetime.datetime.strptime(today_str, "%Y-%m-%d").date()
@@ -2474,7 +2525,7 @@ async def warn(ctx: commands.Context, member: discord.Member, *, reason: str):
 async def banemoji(ctx: commands.Context, emoji: str):
     global BANNED_EMOJIS
     emoji_clean = emoji.strip()
-    if emoji_clean in BANNED_EMOJIS: return await ctx.send(f"⚠️️ The emoji {emoji_clean} is already banned.", delete_after=5)
+    if emoji_clean in BANNED_EMOJIS: return await ctx.send(f"⚠️ The emoji {emoji_clean} is already banned.", delete_after=5)
     BANNED_EMOJIS.append(emoji_clean)
     await safe_write_json(BANNED_EMOJIS_FILE, BANNED_EMOJIS)
     await ctx.send(f"✅ The emoji {emoji_clean} has been successfully banned from the server.")
@@ -2608,7 +2659,7 @@ async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
 @bot.command(name="removexp", aliases=["takexp", "delxp", "remove-xp"])
 @is_authority_holder()
 async def removexp(ctx: commands.Context, member: discord.Member, amount: int):
-    if amount <= 0: return await ctx.send("⚠️️ Please specify an amount greater than 0.", delete_after=5)
+    if amount <= 0: return await ctx.send("⚠️ Please specify an amount greater than 0.", delete_after=5)
     prev_xp, new_xp = await remove_user_xp(member.id, amount)
     current_tier_role = await sync_member_level_roles(member, new_xp)
     old_lvl, new_lvl = calculate_level(prev_xp), calculate_level(new_xp)
@@ -2691,7 +2742,7 @@ async def unlock_channel(ctx: commands.Context, channel: Optional[discord.TextCh
 async def hide_channel(ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
     target = channel or ctx.channel
     await target.set_permissions(ctx.guild.default_role, view_channel=False, reason=f"Hidden by {ctx.author}")
-    await ctx.send(f"👁️‍‍🗨️ {target.mention} is now hidden from standard members.")
+    await ctx.send(f"👁️‍🗨️ {target.mention} is now hidden from standard members.")
 
 @bot.command(name="show")
 @is_authority_holder()
@@ -2941,10 +2992,10 @@ async def restore_all(ctx: commands.Context):
         local_path = MASTER_BACKUP_TEMPLATE.format(guild_id=ctx.guild.id)
         if backup_data := await safe_read_json(local_path, None): source_description = f"Local Master File `{local_path}`"
 
-    if not backup_data: return await status_msg.edit(content="⚠️ **No master backup found!** Either attach a `.json` backup file or ensure one exists in `🩸・bot-errors`.")
+    if not backup_data: return await status_msg.edit(content="⚠️️ **No master backup found!** Either attach a `.json` backup file or ensure one exists in `🩸・bot-errors`.")
 
     await status_msg.edit(content=f"🔄 **Restoring system from {source_description}...**")
-    stats = await apply_unified_restore(ctx.guild, backup_data)
+    stats = await apply_unified_restore(ctx.guild, backup_data, is_manual_rollback=True)
     await bot._provision_blueprint_and_roles(ctx.guild)
     await clear_all_bot_notifications(ctx.guild)
     await deploy_all_system_panels(ctx.guild, bot.command_prefix)
@@ -2992,7 +3043,7 @@ async def maintenance_toggle(ctx: commands.Context, state: Optional[str] = None)
             file_stream = io.BytesIO(json.dumps(payload, indent=4).encode("utf-8"))
             await err_channel.send(content="🔒 **Maintenance Triggered Backup Snapshot**", file=discord.File(file_stream, filename=f"master_backup_{ctx.guild.id}.json"))
         
-        await status_msg.edit(content="🛠️ **Maintenance Mode ON.** Full backup complete. All automated tasks paused and normal members are locked out of bot triggers.")
+        await status_msg.edit(content="🛠️ **Maintenance Mode ON.** Full backup complete. All automated tasks paused and normal members are locked out.")
     
     elif not MAINTENANCE_MODE and state != "status":
         if not xp_drop_task.is_running(): xp_drop_task.start()
