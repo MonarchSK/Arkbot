@@ -206,7 +206,7 @@ SERVER_BLUEPRINT: List[Dict[str, Any]] = [
         {"name": "📢・level-announcements", "type": "text", "restricted": False, "read_only": True},
         {"name": "🎫・tickets", "type": "text", "restricted": False},
         {"name": "🎨・colours", "type": "text", "restricted": False},
-        {"name": "🏷️️・change-nickname", "type": "text", "restricted": False, "read_only": True}
+        {"name": "🏷️・change-nickname", "type": "text", "restricted": False, "read_only": True}
     ]},
     {"category": "Team Area", "channels": [
         {"name": "🚨・team-news", "type": "text", "restricted": True},
@@ -518,13 +518,17 @@ def is_team_authorized():
         raise commands.CheckFailure("⛔ **Restricted:** Only Staff Team members can execute this command.")
     return commands.check(predicate)
 
-def can_moderate(ctx: commands.Context, target: discord.Member) -> bool:
+def can_moderate(ctx: Union[commands.Context, discord.Interaction], target: discord.Member) -> bool:
     """Enforces Discord Role Hierarchy."""
-    if target.top_role >= ctx.author.top_role and ctx.author.id != ctx.guild.owner_id:
+    author = ctx.user if isinstance(ctx, discord.Interaction) else ctx.author
+    guild = ctx.guild
+    if not guild or not author or not target: return False
+    
+    if target.top_role >= author.top_role and author.id != guild.owner_id:
         return False
-    if target.top_role >= ctx.guild.me.top_role:
+    if target.top_role >= guild.me.top_role:
         return False
-    if target.id == ctx.guild.owner_id or target.id == ctx.author.id:
+    if target.id == guild.owner_id or target.id == author.id:
         return False
     return True
 
@@ -540,7 +544,6 @@ def is_team_member(member: Union[discord.Member, discord.User]) -> bool:
     return bool(team_roles.intersection(user_roles))
 
 async def resolve_guild_context(interaction: discord.Interaction) -> Optional[discord.Guild]:
-    """Async Guild Resolver to patch DM caching issues."""
     if interaction.guild:
         return interaction.guild
     for g in interaction.client.guilds:
@@ -555,6 +558,17 @@ async def resolve_guild_context(interaction: discord.Interaction) -> Optional[di
 
 def normalize_name(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "", name).lower()
+
+def parse_duration(duration_str: str) -> Optional[datetime.timedelta]:
+    match = re.match(r"^(\d+)([smhd])$", duration_str.lower())
+    if not match: return None
+    val = int(match.group(1))
+    unit = match.group(2)
+    if unit == 's': return datetime.timedelta(seconds=val)
+    if unit == 'm': return datetime.timedelta(minutes=val)
+    if unit == 'h': return datetime.timedelta(hours=val)
+    if unit == 'd': return datetime.timedelta(days=val)
+    return None
 
 # ==============================================================================
 # ADMIN AREA SECURITY ENFORCER
@@ -1340,8 +1354,289 @@ class TicketView(View):
 
 
 # ==============================================================================
+# MASTER ADMIN GUI - PANELS & MODALS
+# ==============================================================================
+class AdminProfileModal(Modal):
+    def __init__(self, target: discord.Member):
+        super().__init__(title=f"Editing: {target.display_name}"[:45])
+        self.target = target
+        self.nickname = TextInput(label="New Nickname (CLEAR to reset)", placeholder="Leave blank to skip, type CLEAR to reset...", required=False, max_length=32)
+        self.birthday = TextInput(label="Birthday (DD/MM or DD/MM/YYYY)", placeholder="Leave blank to skip...", required=False, max_length=10)
+        self.add_item(self.nickname)
+        self.add_item(self.birthday)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        msgs = []
+        
+        if not can_moderate(interaction, self.target) and interaction.user.id != self.target.id:
+            return await interaction.followup.send("⛔ **Hierarchy Error:** You do not have permission to modify this user's profile.", ephemeral=True)
+
+        # Nickname logic
+        nick_val = self.nickname.value.strip()
+        if nick_val:
+            try:
+                new_nick = None if nick_val.upper() == "CLEAR" else nick_val
+                await self.target.edit(nick=new_nick, reason=f"Admin GUI Profile Edit by {interaction.user}")
+                msgs.append(f"✅ Nickname updated to: **{new_nick or 'Default'}**")
+            except discord.Forbidden:
+                msgs.append("⚠️ Missing permissions to modify nickname.")
+                    
+        # Birthday logic
+        bday_val = self.birthday.value.strip()
+        if bday_val:
+            dob_match = re.match(r"^(\d{1,2})[/\-.](\d{1,2})", bday_val)
+            if dob_match:
+                day, month = int(dob_match.group(1)), int(dob_match.group(2))
+                if 1 <= day <= 31 and 1 <= month <= 12:
+                    formatted_bdate = f"{str(day).zfill(2)}/{str(month).zfill(2)}"
+                    bdays = await load_birthdays()
+                    bdays[str(self.target.id)] = formatted_bdate
+                    await save_birthdays(bdays)
+                    msgs.append(f"🎂 Birthday set to: **{formatted_bdate}**")
+                else:
+                    msgs.append("⚠️ Invalid calendar date for birthday.")
+            else:
+                msgs.append("⚠️ Invalid birthday format.")
+                
+        if not msgs: msgs.append("No changes were made.")
+        await interaction.followup.send("\n".join(msgs), ephemeral=True)
+
+
+class AdminXPModal(Modal):
+    def __init__(self, target: discord.Member):
+        super().__init__(title=f"XP: {target.display_name}"[:45])
+        self.target = target
+        self.action = TextInput(label="Action (add / remove / set)", placeholder="add", required=True, max_length=10)
+        self.amount = TextInput(label="Amount", placeholder="e.g. 500", required=True, max_length=10)
+        self.add_item(self.action)
+        self.add_item(self.amount)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        action = self.action.value.strip().lower()
+        try: amount = int(self.amount.value.strip())
+        except ValueError: return await interaction.followup.send("⚠️ Amount must be a valid number.", ephemeral=True)
+            
+        if amount < 0: return await interaction.followup.send("⚠️ Amount cannot be negative.", ephemeral=True)
+
+        if action in ["add", "give", "+"]:
+            prev_xp, new_xp = await add_user_xp(self.target.id, amount)
+        elif action in ["remove", "take", "deduct", "-"]:
+            prev_xp, new_xp = await remove_user_xp(self.target.id, amount)
+        elif action in ["set", "="]:
+            prev_xp, new_xp = await set_user_xp(self.target.id, amount)
+        else:
+            return await interaction.followup.send("⚠️ Invalid action. Use `add`, `remove`, or `set`.", ephemeral=True)
+            
+        await sync_member_level_roles(self.target, new_xp)
+        await interaction.followup.send(f"✅ XP **{action.upper()}** processed for {self.target.mention}. New Total: **{new_xp:,} XP**", ephemeral=True)
+
+
+class AdminModModal(Modal):
+    def __init__(self, target: discord.Member):
+        super().__init__(title=f"Mod: {target.display_name}"[:45])
+        self.target = target
+        self.action = TextInput(label="Action (warn / mute / unmute / kick / ban)", placeholder="warn", required=True, max_length=10)
+        self.duration = TextInput(label="Duration (Only for mute)", placeholder="e.g. 10m, 1h, 1d (Leave blank otherwise)", required=False, max_length=10)
+        self.reason = TextInput(label="Reason", style=discord.TextStyle.paragraph, required=True)
+        self.add_item(self.action)
+        self.add_item(self.duration)
+        self.add_item(self.reason)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        action = self.action.value.strip().lower()
+        reason = self.reason.value.strip()
+        
+        if not can_moderate(interaction, self.target):
+            return await interaction.followup.send("⛔ **Hierarchy Error:** You do not have permission to moderate this user.", ephemeral=True)
+            
+        if action == "warn":
+            try: await self.target.send(f"⚠️ You have received a warning in **{interaction.guild.name}**.\n**Reason:** {reason}")
+            except: pass
+            if log_ch := await get_or_create_audit_channel(interaction.guild):
+                embed = discord.Embed(title="⚠ Member Warned", color=discord.Color.yellow(), timestamp=discord.utils.utcnow())
+                embed.add_field(name="Member", value=f"{self.target.mention} ({self.target.id})", inline=True)
+                embed.add_field(name="Moderator", value=f"{interaction.user.mention}", inline=True)
+                embed.add_field(name="Reason", value=reason, inline=False)
+                try: await log_ch.send(embed=embed)
+                except: pass
+            await interaction.followup.send(f"✅ **{self.target.display_name}** has been formally warned.", ephemeral=True)
+            
+        elif action in ["mute", "timeout"]:
+            duration_str = self.duration.value.strip()
+            if not duration_str: return await interaction.followup.send("⚠️ You must specify a duration to mute (e.g. 10m, 1h).", ephemeral=True)
+            delta = parse_duration(duration_str)
+            if not delta: return await interaction.followup.send("⚠️ Invalid duration format.", ephemeral=True)
+            until = discord.utils.utcnow() + delta
+            try:
+                await self.target.timeout(until, reason=f"{interaction.user}: {reason}")
+                await interaction.followup.send(f"✅ **{self.target.display_name}** has been muted for {duration_str}.", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.followup.send("⚠️ Permission Error: Arkbot cannot timeout this user.", ephemeral=True)
+            
+        elif action in ["unmute", "removetimeout"]:
+            try:
+                await self.target.timeout(None, reason=f"{interaction.user}: {reason}")
+                await interaction.followup.send(f"✅ **{self.target.display_name}** has been unmuted.", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.followup.send("⚠️ Permission Error: Arkbot cannot unmute this user.", ephemeral=True)
+            
+        elif action == "kick":
+            try: await self.target.send(f"👢 You have been kicked from **{interaction.guild.name}**.\n**Reason:** {reason}")
+            except: pass
+            try:
+                await self.target.kick(reason=f"{interaction.user}: {reason}")
+                await interaction.followup.send(f"✅ **{self.target.display_name}** has been kicked.", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.followup.send("⚠️ Permission Error: Arkbot cannot kick this user.", ephemeral=True)
+            
+        elif action == "ban":
+            try: await self.target.send(f"🔨 You have been banned from **{interaction.guild.name}**.\n**Reason:** {reason}")
+            except: pass
+            try:
+                await self.target.ban(reason=f"{interaction.user}: {reason}")
+                await interaction.followup.send(f"✅ **{self.target.display_name}** has been banned.", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.followup.send("⚠️ Permission Error: Arkbot cannot ban this user.", ephemeral=True)
+        else:
+            await interaction.followup.send("⚠️ Invalid action typed.", ephemeral=True)
+
+
+class TargetUserSelect(discord.ui.UserSelect):
+    def __init__(self, action_type: str):
+        super().__init__(placeholder="Select a member...", min_values=1, max_values=1)
+        self.action_type = action_type
+
+    async def callback(self, interaction: discord.Interaction):
+        target = self.values[0]
+        if isinstance(target, discord.User):
+            target = interaction.guild.get_member(target.id) or await interaction.guild.fetch_member(target.id)
+            
+        if not target or not isinstance(target, discord.Member):
+            return await interaction.response.send_message("⚠️ Failed to resolve member.", ephemeral=True)
+
+        if self.action_type == "profile":
+            await interaction.response.send_modal(AdminProfileModal(target))
+        elif self.action_type == "xp":
+            await interaction.response.send_modal(AdminXPModal(target))
+        elif self.action_type == "mod":
+            await interaction.response.send_modal(AdminModModal(target))
+
+class AdminTargetSelectView(View):
+    def __init__(self, action_type: str):
+        super().__init__(timeout=120.0)
+        self.add_item(TargetUserSelect(action_type))
+
+
+class AdminSystemSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Deploy / Refresh UI Panels", emoji="🖥️", value="deploy_panels", description="Redeploys all server interface panels."),
+            discord.SelectOption(label="Force Master Backup", emoji="💾", value="backup", description="Generates a master system backup immediately."),
+            discord.SelectOption(label="Execute Clean Start", emoji="🧹", value="clean_start", description="Purges stale bot messages and redeploys."),
+            discord.SelectOption(label="Toggle Maintenance Mode", emoji="🛠️", value="maintenance", description="Locks/Unlocks commands for regular members.")
+        ]
+        super().__init__(placeholder="⚙️ Select a System Action...", min_values=1, max_values=1, options=options, custom_id="persistent_admin_system_select")
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        # Verify permissions internally
+        if not getattr(interaction.user.guild_permissions, "administrator", False) and not any(r.name.lower() in ["supreme leader", "highness", "authority"] for r in interaction.user.roles):
+            return await interaction.followup.send("⛔ **Restricted:** Only High Command can execute system actions.", ephemeral=True)
+            
+        choice = self.values[0]
+        if choice == "deploy_panels":
+            await deploy_all_system_panels(interaction.guild, ".")
+            await interaction.followup.send("✅ All system panels successfully redeployed.", ephemeral=True)
+            
+        elif choice == "backup":
+            payload = await generate_unified_backup_payload(interaction.guild)
+            await safe_write_json(MASTER_BACKUP_TEMPLATE.format(guild_id=interaction.guild.id), payload)
+            err_channel = discord.utils.get(interaction.guild.text_channels, name="🩸・bot-errors") or discord.utils.get(interaction.guild.text_channels, name="bot-errors")
+            if err_channel:
+                await purge_all_old_backups(err_channel)
+                file_stream = io.BytesIO(json.dumps(payload, indent=4).encode("utf-8"))
+                await err_channel.send(content="🔒 **Manual Master System Backup**", file=discord.File(file_stream, filename=f"master_backup_{interaction.guild.id}.json"))
+            await interaction.followup.send("✅ Master backup explicitly generated and saved.", ephemeral=True)
+            
+        elif choice == "clean_start":
+            await clear_all_bot_notifications(interaction.guild)
+            await deploy_all_system_panels(interaction.guild, ".")
+            await interaction.followup.send("🧹 Clean start executed. Bot caches purged and panels refreshed.", ephemeral=True)
+            
+        elif choice == "maintenance":
+            global MAINTENANCE_MODE
+            MAINTENANCE_MODE = not MAINTENANCE_MODE
+            await persist_runtime_state()
+            state_str = "ENABLED (Locked)" if MAINTENANCE_MODE else "DISABLED (Open)"
+            await interaction.followup.send(f"🛠️ Maintenance Mode is now **{state_str}**.", ephemeral=True)
+
+
+class AdminMasterPanelView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(AdminSystemSelect())
+
+    async def check_perms(self, interaction: discord.Interaction, is_high_command: bool = False) -> bool:
+        user_roles = [r.name.lower() for r in interaction.user.roles]
+        if getattr(interaction.user.guild_permissions, "administrator", False):
+            return True
+            
+        allowed_roles = ["supreme leader", "highness", "authority"]
+        if not is_high_command:
+            allowed_roles.extend(["head moderator", "moderator", "trial mod"])
+            
+        if not any(r in allowed_roles for r in user_roles):
+            await interaction.response.send_message("⛔ **Restricted:** Only authorized Staff can access this interface.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Modify Profile", style=discord.ButtonStyle.primary, custom_id="persistent_admin_profile", emoji="📝", row=1)
+    async def mod_profile(self, interaction: discord.Interaction, button: Button):
+        if await self.check_perms(interaction):
+            await interaction.response.send_message("Select a target user to modify their profile (Nickname / Birthday):", view=AdminTargetSelectView("profile"), ephemeral=True)
+
+    @discord.ui.button(label="Manage XP", style=discord.ButtonStyle.success, custom_id="persistent_admin_xp", emoji="⭐", row=1)
+    async def manage_xp(self, interaction: discord.Interaction, button: Button):
+        if await self.check_perms(interaction, is_high_command=True):  # XP edits locked to Authority
+            await interaction.response.send_message("Select a target user for XP management:", view=AdminTargetSelectView("xp"), ephemeral=True)
+
+    @discord.ui.button(label="Quick Mod", style=discord.ButtonStyle.danger, custom_id="persistent_admin_mod", emoji="🛡️", row=1)
+    async def quick_mod(self, interaction: discord.Interaction, button: Button):
+        if await self.check_perms(interaction):
+            await interaction.response.send_message("Select a target user to moderate (Warn / Mute / Ban / Kick):", view=AdminTargetSelectView("mod"), ephemeral=True)
+
+
+# ==============================================================================
 # PANEL DEPLOYERS
 # ==============================================================================
+async def deploy_admin_panel(guild: discord.Guild):
+    ch = discord.utils.get(guild.text_channels, name="💼・bot-commands") or discord.utils.get(guild.text_channels, name="bot-commands")
+    if not ch: return
+    try:
+        async for msg in ch.history(limit=25):
+            if msg.author == guild.me and msg.embeds and "MASTER ADMIN CONTROL PANEL" in (msg.embeds[0].title or ""):
+                return # Prevent duplicates
+    except Exception: pass
+
+    embed = discord.Embed(
+        title="🎛️ MASTER ADMIN CONTROL PANEL",
+        description=("**High Command & Staff Tools GUI**\n\n"
+                     "Use the interactive buttons and menus below to rapidly manage server members, XP drops, and core system architectures without typing commands.\n\n"
+                     "• **Modify Profile:** Change nicknames & birthdays directly.\n"
+                     "• **Manage XP:** Add, remove, or set exact XP amounts.\n"
+                     "• **Quick Mod:** Warn, mute, kick, and ban users natively.\n"
+                     "• **System Actions:** Trigger cleanups, backups, and maintenance."),
+        color=discord.Color.dark_theme(),
+    )
+    if guild.icon: embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text="Arkbot Internal Staff Interface • Restricted Access")
+    try: await ch.send(embed=embed, view=AdminMasterPanelView())
+    except discord.HTTPException as e: print(f"[Admin Panel Deploy Error]: {e}")
+
 async def deploy_nickname_panel(guild: discord.Guild):
     ch = discord.utils.get(guild.text_channels, name="🏷️・change-nickname") or discord.utils.get(guild.text_channels, name="change-nickname")
     if not ch: return
@@ -1481,7 +1776,7 @@ async def deploy_team_news_commands_panel(guild: discord.Guild, prefix: str = ".
     except Exception: pass
 
     commands_embed = discord.Embed(title="💼 TEAM & AUTHORITY ACTIVE BOT COMMANDS", description="Reference manual for bot commands accessible to Authority, Moderators, and Team members:", color=discord.Color.gold(), timestamp=discord.utils.utcnow())
-    commands_embed.add_field(name="🛡️ Moderation Tools (Team & Staff)", value=(f"`{prefix}ban <@user> [reason]` — Bans a member from the server.\n`{prefix}kick <@user> [reason]` — Kicks a member from the server.\n`{prefix}mute <@user> <duration> [reason]` — Timeouts a member (e.g., `10m`, `1h`, `1d`).\n`{prefix}unmute <@user>` — Removes an active timeout.\n`{prefix}warn <@user> <reason>` — DMs a formal warning and logs it."), inline=False)
+    commands_embed.add_field(name="🛡️ Moderation Tools (Team & Staff)", value=(f"`{prefix}adminpanel` — Opens the Master GUI Control Panel.\n`{prefix}ban <@user> [reason]` — Bans a member from the server. Checks role hierarchy.\n`{prefix}kick <@user> [reason]` — Kicks a member from the server.\n`{prefix}mute <@user> <duration> [reason]` — Timeouts a member (e.g., `10m`, `1h`, `1d`).\n`{prefix}unmute <@user>` — Removes an active timeout.\n`{prefix}warn <@user> <reason>` — DMs a formal warning and logs it."), inline=False)
     commands_embed.add_field(name="🧹 Channel Purge & Cleanup (Authority)", value=(f"`{prefix}purge <1-1000> [target]` — Bulk delete messages with user/bot/link filters.\n`{prefix}remove_bot_role <@role/@bot/all>` — Immediately cuts bot access from a room."), inline=False)
     commands_embed.add_field(name="🔒 Channel Security & Overrides (Authority)", value=(f"`{prefix}lock` / `{prefix}unlock` — Mutes or opens the current room for members.\n`{prefix}hide` / `{prefix}show` — Toggles channel visibility from standard members.\n`{prefix}permit <@user/@role>` — Whitelists a member or role into the channel.\n`{prefix}revoke <@user/@role>` — Evicts a member or role from the channel."), inline=False)
     commands_embed.add_field(name="⭐ XP Management & Spawners (Authority)", value=(f"`{prefix}addxp <@user> <amount>` — Grants XP and automatically recalculates rank roles.\n`{prefix}removexp <@user> <amount>` — Deducts XP and updates tier roles accordingly.\n`{prefix}setxp <@user> <amount>` — Sets exact XP and syncs corresponding rank roles.\n`{prefix}superdrop [amount] [#ch]` — Spawns a massive Super XP drop.\n`{prefix}xpdrop [amount] [#ch]` — Spawns a standard wild XP drop."), inline=False)
@@ -1495,7 +1790,7 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     if not cmd_channel: return
     try:
         async for msg in cmd_channel.history(limit=50):
-            if msg.author == guild.me:
+            if msg.author == guild.me and msg.embeds and "BOT MASTER COMMAND DIRECTORY" in (msg.embeds[0].title or ""):
                 await msg.delete()
                 await asyncio.sleep(0.3)
     except (discord.Forbidden, discord.HTTPException): pass
@@ -1524,6 +1819,7 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     mod_embed.add_field(name=f"`{prefix}announce [#channel] <title> | <text> [--everyone/--here]`", value="Dispatches a formatted official announcement embed.", inline=False)
 
     team_embed = discord.Embed(title="⚖️ 3. Team Moderation Suite", description="Reserved for **Staff Team, Moderators, and Authority**:", color=discord.Color.red())
+    team_embed.add_field(name=f"`{prefix}adminpanel`", value="Opens the Interactive GUI for easy profile & user moderation without typing commands.", inline=False)
     team_embed.add_field(name=f"`{prefix}ban <@user> [reason]`", value="Bans a member from the server. Checks role hierarchy.", inline=False)
     team_embed.add_field(name=f"`{prefix}kick <@user> [reason]`", value="Kicks a member from the server.", inline=False)
     team_embed.add_field(name=f"`{prefix}mute <@user> <time> [reason]`", value="Times out a member (Format: `10m`, `1h`, `1d`).", inline=False)
@@ -1589,6 +1885,7 @@ async def deploy_all_system_panels(guild: discord.Guild, prefix: str = "."):
     await deploy_confession_panel(guild)
     await deploy_birthday_panel(guild)
     await deploy_notifications_panel(guild)
+    await deploy_admin_panel(guild)
 
 
 # ==============================================================================
@@ -1618,6 +1915,7 @@ class ArkBot(commands.Bot):
         self.add_view(ConfessionPanelView())
         self.add_view(BirthdayPanelView())
         self.add_view(NicknamePanelView())
+        self.add_view(AdminMasterPanelView())
 
         asyncio.create_task(self._auto_restore_all_guilds())
 
@@ -2110,16 +2408,22 @@ async def bump(ctx: commands.Context):
 # ------------------------------------------------------------------------------
 # TEAM MODERATION COMMANDS (Ban, Kick, Mute, Warn)
 # ------------------------------------------------------------------------------
-def parse_duration(duration_str: str) -> Optional[datetime.timedelta]:
-    match = re.match(r"^(\d+)([smhd])$", duration_str.lower())
-    if not match: return None
-    val = int(match.group(1))
-    unit = match.group(2)
-    if unit == 's': return datetime.timedelta(seconds=val)
-    if unit == 'm': return datetime.timedelta(minutes=val)
-    if unit == 'h': return datetime.timedelta(hours=val)
-    if unit == 'd': return datetime.timedelta(days=val)
-    return None
+@bot.command(name="adminpanel", aliases=["controlpanel", "cpanel"])
+@is_team_authorized()
+async def spawn_admin_panel(ctx: commands.Context):
+    embed = discord.Embed(
+        title="🎛️ MASTER ADMIN CONTROL PANEL",
+        description=("**High Command & Staff Tools GUI**\n\n"
+                     "Use the interactive buttons and menus below to rapidly manage server members, XP drops, and core system architectures without typing commands.\n\n"
+                     "• **Modify Profile:** Change nicknames & birthdays directly.\n"
+                     "• **Manage XP:** Add, remove, or set exact XP amounts.\n"
+                     "• **Quick Mod:** Warn, mute, kick, and ban users natively.\n"
+                     "• **System Actions:** Trigger cleanups, backups, and maintenance."),
+        color=discord.Color.dark_theme(),
+    )
+    if ctx.guild.icon: embed.set_thumbnail(url=ctx.guild.icon.url)
+    embed.set_footer(text="Arkbot Internal Staff Interface • Restricted Access")
+    await ctx.send(embed=embed, view=AdminMasterPanelView())
 
 @bot.command(name="ban")
 @is_team_authorized()
@@ -2183,7 +2487,7 @@ async def warn(ctx: commands.Context, member: discord.Member, *, reason: str):
     await ctx.send(f"⚠️ **{member}** has been officially warned. \n**Reason:** {reason}")
     
     if log_ch := await get_or_create_audit_channel(ctx.guild):
-        embed = discord.Embed(title="⚠️️ Member Warned", color=discord.Color.yellow(), timestamp=discord.utils.utcnow())
+        embed = discord.Embed(title="⚠ Member Warned", color=discord.Color.yellow(), timestamp=discord.utils.utcnow())
         embed.add_field(name="Member", value=f"{member.mention} ({member.id})", inline=True)
         embed.add_field(name="Moderator", value=f"{ctx.author.mention}", inline=True)
         embed.add_field(name="Reason", value=reason, inline=False)
