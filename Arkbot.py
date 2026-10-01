@@ -206,7 +206,7 @@ SERVER_BLUEPRINT: List[Dict[str, Any]] = [
         {"name": "📢・level-announcements", "type": "text", "restricted": False, "read_only": True},
         {"name": "🎫・tickets", "type": "text", "restricted": False},
         {"name": "🎨・colours", "type": "text", "restricted": False},
-        {"name": "🏷️️・change-nickname", "type": "text", "restricted": False, "read_only": True}
+        {"name": "🏷️・change-nickname", "type": "text", "restricted": False, "read_only": True}
     ]},
     {"category": "Team Area", "channels": [
         {"name": "🚨・team-news", "type": "text", "restricted": True},
@@ -983,7 +983,7 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
         pass
 
 # ==============================================================================
-# UI COMPONENTS (NICKNAMES, XP DROPS, CONFESSIONS, COLOURS, TICKETS, BDAY)
+# UI COMPONENTS (NICKNAMES, XP DROPS, CONFESSIONS, COLOURS, TICKETS, BDAY, ADMIN)
 # ==============================================================================
 async def _schedule_message_deletion(message: Optional[discord.Message], delay: float = 7.0):
     if not message: return
@@ -1339,6 +1339,78 @@ class TicketView(View):
         await interaction.response.send_modal(TeamApplicationModal())
 
 
+class AdminActionModal(Modal):
+    def __init__(self, action: str, member: discord.Member):
+        super().__init__(title=f"{action}: {member.display_name}")
+        self.action = action
+        self.member = member
+        
+        if action == "Edit Nickname":
+            self.val = TextInput(label="New Nickname (Leave empty to reset)", required=False, max_length=32)
+        elif action == "Set XP":
+            self.val = TextInput(label="New XP Amount", placeholder="e.g. 5000", required=True)
+            
+        self.add_item(self.val)
+        
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        if self.member.top_role >= interaction.guild.me.top_role and self.member.id != interaction.guild.owner_id:
+            return await interaction.followup.send("⚠️ Cannot modify this user due to Discord Role Hierarchy.", ephemeral=True)
+            
+        if self.action == "Edit Nickname":
+            new_nick = self.val.value.strip() or None
+            try:
+                await self.member.edit(nick=new_nick, reason=f"Admin Dashboard Override by {interaction.user}")
+                await interaction.followup.send(f"✅ Forced nickname update to: **{new_nick or 'Default Username'}**", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.followup.send("⚠️ Permission denied.", ephemeral=True)
+                
+        elif self.action == "Set XP":
+            try:
+                amt = int(self.val.value.strip())
+                prev_xp, new_xp = await set_user_xp(self.member.id, amt)
+                await sync_member_level_roles(self.member, new_xp)
+                await interaction.followup.send(f"✅ Forced XP update: **{new_xp:,} XP** (Level {calculate_level(new_xp)})", ephemeral=True)
+            except ValueError:
+                await interaction.followup.send("⚠️ Invalid number format.", ephemeral=True)
+
+class AdminUserActionsView(View):
+    def __init__(self, member: discord.Member):
+        super().__init__(timeout=300)
+        self.member = member
+
+    @discord.ui.button(label="Force Change Nickname", style=discord.ButtonStyle.primary, emoji="🏷️")
+    async def change_nick(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(AdminActionModal("Edit Nickname", self.member))
+        
+    @discord.ui.button(label="Override XP", style=discord.ButtonStyle.success, emoji="⭐")
+    async def override_xp(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(AdminActionModal("Set XP", self.member))
+
+    @discord.ui.button(label="Kick User", style=discord.ButtonStyle.danger, emoji="👢")
+    async def kick_user(self, interaction: discord.Interaction, button: Button):
+        if self.member.top_role >= interaction.guild.me.top_role:
+            return await interaction.response.send_message("⚠️ Cannot kick this user due to Discord Role Hierarchy.", ephemeral=True)
+        await self.member.kick(reason=f"Admin Dashboard action by {interaction.user}")
+        await interaction.response.send_message(f"✅ Kicked **{self.member}**.", ephemeral=True)
+
+class AdminControlPanelView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Select a Member to Manage...", min_values=1, max_values=1, custom_id="admin_dashboard_select")
+    async def select_user(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        selected_user = select.values[0]
+        if isinstance(selected_user, discord.User):
+            selected_user = interaction.guild.get_member(selected_user.id)
+            
+        await interaction.response.send_message(
+            f"🛠️ **Managing Profile:** {selected_user.mention}\nChoose an override action below:", 
+            ephemeral=True, 
+            view=AdminUserActionsView(selected_user)
+        )
+
+
 # ==============================================================================
 # PANEL DEPLOYERS
 # ==============================================================================
@@ -1540,7 +1612,8 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     admin_embed = discord.Embed(title="⚙️ 5. Administration, Panels & Disaster Recovery", description="System recovery suite restricted to **Supreme Leader** & **Highness**:", color=discord.Color.dark_red())
     admin_embed.add_field(name=f"`{prefix}clean_start`", value="**Auto-clears all stale bot notifications, warnings, and alerts across the server.**", inline=False)
     admin_embed.add_field(name=f"`{prefix}deploy_panels`", value="Runs and deploys ALL server UI panels across every designated channel.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}setup_nicknames`", value="Deploys the Level 11+ Nickname Customization panel in `#🏷️・change-nickname`.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}admin_panel`", value="Spawns the Executive Admin UI Dashboard for forced user edits.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}setup_nicknames`", value="Deploys the Level 11+ Nickname Customization panel in `#🏷️️・change-nickname`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_channels`", value="Non-destructively provisions missing blueprint channels & categories.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_roles`", value="Provisions missing staff, ping, cosmetic, and tier level roles.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_birthdays`", value="Deploys the interactive Birthday Registration panel in `🎂・birthdays`.", inline=False)
@@ -1553,6 +1626,7 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     admin_embed.add_field(name=f"`{prefix}refresh_commands`", value="Refreshes this complete master manual in `#💼・bot-commands`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}backup_all`", value="Generates and overwrites the single unified master backup snapshot.", inline=False)
     admin_embed.add_field(name=f"`{prefix}restore_all`", value="Restores channels, permissions, XP, birthdays, and confessions.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}restore_xp_from_roles`", value="Scans members and rebuilds lost XP based on their existing tier roles.", inline=False)
     admin_embed.add_field(name=f"`{prefix}maintenance [on/off/status]`", value="Locks or unlocks non-administrative commands for maintenance.", inline=False)
     admin_embed.add_field(name=f"`{prefix}shutdown [reason]`", value="Flushes state, saves master backup, and terminates cleanly.", inline=False)
 
@@ -1618,6 +1692,7 @@ class ArkBot(commands.Bot):
         self.add_view(ConfessionPanelView())
         self.add_view(BirthdayPanelView())
         self.add_view(NicknamePanelView())
+        self.add_view(AdminControlPanelView()) # Admin Dashboard Registered
 
         asyncio.create_task(self._auto_restore_all_guilds())
 
@@ -1875,6 +1950,14 @@ async def on_member_join(member: discord.Member):
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot: return
+
+    # --- TRUE MAINTENANCE LOCKDOWN ---
+    if MAINTENANCE_MODE:
+        is_admin = getattr(getattr(message.author, "guild_permissions", None), "administrator", False)
+        if not is_admin:
+            return  # Completely halts XP gains, drops, and tracking for non-admins
+    # ---------------------------------
+
     ctx = await bot.get_context(message)
 
     if message.author.id in AFK_USERS and ctx.command and ctx.command.name == "afk":
@@ -2183,7 +2266,7 @@ async def warn(ctx: commands.Context, member: discord.Member, *, reason: str):
     await ctx.send(f"⚠️ **{member}** has been officially warned. \n**Reason:** {reason}")
     
     if log_ch := await get_or_create_audit_channel(ctx.guild):
-        embed = discord.Embed(title="⚠️️ Member Warned", color=discord.Color.yellow(), timestamp=discord.utils.utcnow())
+        embed = discord.Embed(title="⚠ Member Warned", color=discord.Color.yellow(), timestamp=discord.utils.utcnow())
         embed.add_field(name="Member", value=f"{member.mention} ({member.id})", inline=True)
         embed.add_field(name="Moderator", value=f"{ctx.author.mention}", inline=True)
         embed.add_field(name="Reason", value=reason, inline=False)
@@ -2291,7 +2374,7 @@ async def addxp(ctx: commands.Context, member: discord.Member, amount: int):
     
     embed = discord.Embed(
         title="✨ XP Manually Granted",
-        description=f"Successfully added **+{amount:,} XP** to {member.mention}!\n\n📊 **Total XP:** `{new_xp:,} XP`\n🎖️️ **Level:** `Level {new_lvl}` " + (f"*(Ranked up from Level {old_lvl}!)*" if new_lvl > old_lvl else "") + f"\n🛡️ **Current Tier:** {current_tier_role.mention if current_tier_role else '`None`'}",
+        description=f"Successfully added **+{amount:,} XP** to {member.mention}!\n\n📊 **Total XP:** `{new_xp:,} XP`\n🎖 **Level:** `Level {new_lvl}` " + (f"*(Ranked up from Level {old_lvl}!)*" if new_lvl > old_lvl else "") + f"\n🛡️ **Current Tier:** {current_tier_role.mention if current_tier_role else '`None`'}",
         color=discord.Color.green(), timestamp=discord.utils.utcnow(),
     )
     embed.set_thumbnail(url=member.display_avatar.url)
@@ -2441,7 +2524,7 @@ async def announce(ctx: commands.Context, *, raw_content: Optional[str] = None):
     body = body or "*No message body provided.*"
 
     bot_perms = target_channel.permissions_for(ctx.guild.me)
-    if not (bot_perms.send_messages and bot_perms.embed_links): return await ctx.send(f"⚠️ **Permission Error:** I lack `Send Messages` or `Embed Links` in {target_channel.mention}.", delete_after=8)
+    if not (bot_perms.send_messages and bot_perms.embed_links): return await ctx.send(f"⚠️️ **Permission Error:** I lack `Send Messages` or `Embed Links` in {target_channel.mention}.", delete_after=8)
 
     embed = discord.Embed(title=title, description=body, color=discord.Color.gold(), timestamp=discord.utils.utcnow())
     embed.set_footer(text=f"Issued by {ctx.author.display_name}")
@@ -2458,38 +2541,35 @@ async def announce(ctx: commands.Context, *, raw_content: Optional[str] = None):
 @bot.command(name="purge")
 @is_purge_authorized()
 async def purge(ctx: commands.Context, amount: int = 10, target: Optional[Union[discord.Member, str]] = None):
-    if amount < 1 or amount > 1000: return await ctx.send("⚠️ Specify a message count between 1 and 1,000.", delete_after=5)
-    try: await ctx.message.delete()
-    except (discord.Forbidden, discord.NotFound, discord.HTTPException): pass
+    if amount < 1 or amount > 1000: 
+        return await ctx.send("⚠️ Specify a message count between 1 and 1,000.", delete_after=5)
+        
+    try: 
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException): 
+        pass
 
     def purge_check(m: discord.Message) -> bool:
         if m.pinned: return False
-        if isinstance(target, discord.Member): return m.author.id == target.id
+        if isinstance(target, discord.Member): 
+            return m.author.id == target.id
         elif isinstance(target, str):
             t_lower = target.lower()
             if t_lower in ["bot", "bots"]: return m.author.bot
-            if t_lower in ["link", "links"]: return bool(INVITE_REGEX.search(m.content) or "http://" in m.content.lower() or "https://" in m.content.lower())
+            if t_lower in ["link", "links"]: 
+                return bool(INVITE_REGEX.search(m.content) or "http://" in m.content.lower() or "https://" in m.content.lower())
         return True
 
-    deleted_total, cutoff = 0, discord.utils.utcnow() - datetime.timedelta(days=14)
-    while deleted_total < amount:
-        batch_limit = min(amount - deleted_total, 100)
-        deleted_batch = await ctx.channel.purge(limit=batch_limit, check=purge_check, after=cutoff)
-        deleted_total += len(deleted_batch)
-        if len(deleted_batch) < batch_limit: break
-        await asyncio.sleep(0.5)
-
-    if deleted_total < amount:
-        async for old_msg in ctx.channel.history(limit=min((amount - deleted_total) * 4, 300), before=cutoff):
-            if deleted_total >= amount: break
-            if purge_check(old_msg):
-                try:
-                    await old_msg.delete()
-                    deleted_total += 1
-                    await asyncio.sleep(0.3)
-                except (discord.NotFound, discord.HTTPException): pass
-
-    await ctx.send(f"🧹 Cleared **{deleted_total}** message(s) {f'from {target.mention}' if isinstance(target, discord.Member) else (f'matching `{target}`' if target else '')}.", delete_after=4)
+    status_msg = await ctx.send(f"🧹 **Purging messages...**")
+    
+    deleted = await ctx.channel.purge(limit=amount, check=purge_check, bulk=True)
+    
+    try: 
+        await status_msg.delete()
+    except discord.NotFound: 
+        pass
+        
+    await ctx.send(f"🧹 Successfully cleared **{len(deleted)}** message(s).", delete_after=5)
 
 @bot.command(name="clean_start", aliases=["clear_notifications", "clear_notifs", "clearnotifications"])
 @commands.has_permissions(administrator=True)
@@ -2573,6 +2653,67 @@ async def refresh_rules(ctx: commands.Context):
 async def refresh_commands(ctx: commands.Context):
     await deploy_bot_commands_panel(ctx.guild, bot.command_prefix)
     await ctx.send("✅ **Master bot command manual refreshed in `💼・bot-commands`!**", delete_after=5)
+
+@bot.command(name="admin_panel", aliases=["staff_panel", "dashboard"])
+@commands.has_permissions(administrator=True)
+async def spawn_admin_panel(ctx: commands.Context):
+    embed = discord.Embed(
+        title="🛡️ Executive Admin Dashboard", 
+        description="Use the dropdown below to select any member in the server and force-edit their Nickname, XP, or Status.", 
+        color=discord.Color.dark_red()
+    )
+    await ctx.send(embed=embed, view=AdminControlPanelView())
+    try: 
+        await ctx.message.delete()
+    except: 
+        pass
+
+@bot.command(name="restore_xp_from_roles", aliases=["recover_xp"])
+@commands.has_permissions(administrator=True)
+async def restore_xp_from_roles(ctx: commands.Context):
+    status_msg = await ctx.send("🔄 **Scanning members to restore XP based on existing rank roles...**")
+    
+    restored_count = 0
+    total_xp_restored = 0
+    
+    sorted_tiers = sorted(LEVEL_TIERS, key=lambda x: x[0], reverse=True)
+    
+    for member in ctx.guild.members:
+        if member.bot: 
+            continue
+            
+        highest_level = 0
+        member_role_names = {r.name for r in member.roles}
+        
+        for min_lvl, r_name in sorted_tiers:
+            if r_name in member_role_names:
+                highest_level = min_lvl
+                break
+                
+        if highest_level > 0:
+            base_xp = xp_for_level(highest_level)
+            current_xp = await get_user_xp(member.id)
+            
+            if current_xp < base_xp:
+                await set_user_xp(member.id, base_xp)
+                restored_count += 1
+                total_xp_restored += (base_xp - current_xp)
+
+    await flush_xp_cache()
+    
+    embed = discord.Embed(
+        title="✅ XP Recovery Complete",
+        description=(
+            f"Successfully restored lost XP by scanning member tier roles.\n\n"
+            f"• **Members Recovered:** `{restored_count}`\n"
+            f"• **Total XP Restored:** `{total_xp_restored:,} XP`\n\n"
+            f"*Members were granted the baseline XP required to hold their current rank.*"
+        ),
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_footer(text=f"Disaster Recovery initiated by {ctx.author.display_name}")
+    await status_msg.edit(content=None, embed=embed)
 
 @bot.command(name="afk")
 async def afk(ctx: commands.Context, *, reason: Optional[str] = None):
