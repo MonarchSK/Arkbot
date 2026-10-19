@@ -41,6 +41,8 @@ BIRTHDAYS_FILE = "birthdays.json"
 CONFESSIONS_FILE = "confessions.json"
 MASTER_BACKUP_TEMPLATE = "master_backup_{guild_id}.json"
 
+ise (under 1800 characters). "
+    "Keep all content strictly tee# --- AI CONFIGURATION & MEMORY ---
 # --- AI CONFIGURATION & MEMORY ---
 GEMINI_API_KEY = (
     os.getenv("GEMINI_API_KEY")
@@ -50,8 +52,10 @@ GEMINI_API_KEY = (
 ).strip().strip('"').strip("'")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if (GENAI_AVAILABLE and GEMINI_API_KEY) else None
-AI_MODEL = "gemini-1.5-flash"
-AI_BETA_MODEL = "gemini-1.5-pro"
+
+# Using gemini-flash-latest avoids 404 Not Found version mismatches
+AI_MODEL = "gemini-flash-latest"
+AI_BETA_MODEL = "gemini-flash-latest"
 
 AI_CHAT_HISTORY: Dict[int, deque] = defaultdict(lambda: deque(maxlen=16))
 AI_USER_COOLDOWNS: Dict[int, float] = {}
@@ -63,6 +67,51 @@ AI_SYSTEM_PROMPT = (
     "Keep all content strictly teen-friendly and respectful of Discord Terms of Service. "
     "You were engineered by iamthesubhanahmed (Tier3.pk)."
 )
+
+# ==============================================================================
+# AI DYNAMIC GENERATION HELPERS (Safeguarded)
+# ==============================================================================
+async def ai_dynamic_text(task_prompt: str, fallback: str) -> str:
+    """Generates dynamic one-liner preset messages via AI instead of hardcoded lists."""
+    if not AI_ENABLED or not ai_client:
+        return fallback
+    try:
+        resp = await ai_client.aio.models.generate_content(
+            model=AI_MODEL,
+            contents=task_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction="You write short, vivid 1-sentence Discord server messages with 1-2 emojis. Output ONLY the message text, no quotes.",
+                temperature=0.9,
+                max_output_tokens=80,
+            ),
+        )
+        return (resp.text or "").strip().strip('"') or fallback
+    except Exception:
+        return fallback
+
+async def generate_ai_reply(channel_id: int, user_name: str, prompt_text: str, use_beta: bool = False) -> str:
+    if not AI_ENABLED:
+        return "⚠️ **AI Engine is currently paused** by server administrators."
+    if not ai_client:
+        return "⚠️ **AI Engine Offline:** Ensure `GEMINI_API_KEY` is set on Render and `google-genai` is installed."
+
+    formatted_input = f"{user_name}: {prompt_text}"
+
+    try:
+        response = await ai_client.aio.models.generate_content(
+            model=AI_MODEL,
+            contents=formatted_input,
+            config=types.GenerateContentConfig(
+                system_instruction=AI_SYSTEM_PROMPT,
+                temperature=0.75,
+                max_output_tokens=1024,
+            ),
+        )
+        reply = (response.text or "").strip()
+        return reply or "🤔 I couldn't come up with a response for that. Try rephrasing!"
+    except Exception as e:
+        print(f"[AI Generation Error Details]: {type(e).__name__} - {e}")
+        return f"⚠️ **AI Error:** `{type(e).__name__}` — Check Render console logs."
 
 # In-memory caches & state
 AFK_USERS: Dict[int, Dict[str, Any]] = {}
