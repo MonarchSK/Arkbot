@@ -32,7 +32,7 @@ intents.members = True
 
 UPDATE_NOTIFIED = False
 MAINTENANCE_MODE = False
-AI_ENABLED = True
+AI_ENABLED = False
 
 STATE_FILE = "bot_runtime_state.json"
 XP_DATABASE_FILE = "user_xp.json"
