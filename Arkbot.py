@@ -15,14 +15,13 @@ import discord
 from discord.ext import commands, tasks
 from discord.ui import Button, Modal, TextInput, View
 
-# --- AI ENGINE IMPORT ---
+# --- GROQ AI ENGINE IMPORT ---
 try:
-    from google import genai
-    from google.genai import types
-    GENAI_AVAILABLE = True
+    from groq import Groq
+    GROQ_AVAILABLE = True
 except ImportError:
-    GENAI_AVAILABLE = False
-    print("⚠️ [AI Engine] 'google-genai' package not installed. Run: pip install google-genai")
+    GROQ_AVAILABLE = False
+    print("⚠️ [AI Engine] 'groq' package not installed. Run: pip install groq")
 
 # ==============================================================================
 # BOT SETUP & INTENTS
@@ -41,16 +40,15 @@ BIRTHDAYS_FILE = "birthdays.json"
 CONFESSIONS_FILE = "confessions.json"
 MASTER_BACKUP_TEMPLATE = "master_backup_{guild_id}.json"
 
-# --- AI CONFIGURATION & MEMORY ---
-GEMINI_API_KEY = (
-    os.getenv("GEMINI_API_KEY")
-    or os.getenv("GOOGLE_API_KEY")
+# --- GROQ CONFIGURATION ---
+GROQ_API_KEY = (
+    os.getenv("GROQ_API_KEY")
     or os.getenv("API_KEY")
     or ""
 ).strip().strip('"').strip("'")
 
-ai_client = genai.Client(api_key=GEMINI_API_KEY) if (GENAI_AVAILABLE and GEMINI_API_KEY) else None
-AI_MODEL = "gemini-flash-latest"  # Prevents 404 model version errors
+groq_client = Groq(api_key=GROQ_API_KEY) if (GROQ_AVAILABLE and GROQ_API_KEY) else None
+AI_MODEL = "llama-3.3-70b-versatile"  # High-performance, fast model on Groq
 
 AI_USER_COOLDOWNS: Dict[int, float] = {}
 AI_COOLDOWN_SECONDS = 3.0
@@ -117,48 +115,52 @@ LEVEL_TIERS: List[Tuple[int, str]] = [
 COLOR_ROLES = ["Red", "Yellow", "Green", "Blue", "Orange", "Pink"]
 
 # ==============================================================================
-# AI DYNAMIC GENERATION HELPERS (Safeguarded)
+# GROQ AI DYNAMIC GENERATION HELPERS
 # ==============================================================================
 async def ai_dynamic_text(task_prompt: str, fallback: str) -> str:
-    """Generates dynamic one-liner preset messages via AI instead of hardcoded lists."""
-    if not AI_ENABLED or not ai_client:
+    """Generates dynamic one-liner preset messages via Groq instead of hardcoded lists."""
+    if not AI_ENABLED or not groq_client:
         return fallback
     try:
-        resp = await ai_client.aio.models.generate_content(
-            model=AI_MODEL,
-            contents=task_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction="You write short, vivid 1-sentence Discord server messages with 1-2 emojis. Output ONLY the message text, no quotes.",
+        def _call_groq():
+            return groq_client.chat.completions.create(
+                model=AI_MODEL,
+                messages=[
+                    {"role": "system", "content": "You write short, vivid 1-sentence Discord server messages with 1-2 emojis. Output ONLY the message text, no quotes."},
+                    {"role": "user", "content": task_prompt}
+                ],
                 temperature=0.9,
-                max_output_tokens=80,
-            ),
-        )
-        return (resp.text or "").strip().strip('"') or fallback
+                max_tokens=80,
+            )
+        resp = await asyncio.to_thread(_call_groq)
+        return (resp.choices[0].message.content or "").strip().strip('"') or fallback
     except Exception:
         return fallback
 
 async def generate_ai_reply(user_name: str, prompt_text: str) -> str:
     if not AI_ENABLED:
         return "⚠️ **AI Engine is currently paused** by server administrators."
-    if not ai_client:
-        return "⚠️ **AI Engine Offline:** Ensure `GEMINI_API_KEY` is set properly on Render."
+    if not groq_client:
+        return "⚠️ **AI Engine Offline:** Ensure `GROQ_API_KEY` is set properly on Render."
 
     formatted_input = f"{user_name}: {prompt_text}"
 
     try:
-        response = await ai_client.aio.models.generate_content(
-            model=AI_MODEL,
-            contents=formatted_input,
-            config=types.GenerateContentConfig(
-                system_instruction=AI_SYSTEM_PROMPT,
+        def _call_groq():
+            return groq_client.chat.completions.create(
+                model=AI_MODEL,
+                messages=[
+                    {"role": "system", "content": AI_SYSTEM_PROMPT},
+                    {"role": "user", "content": formatted_input}
+                ],
                 temperature=0.75,
-                max_output_tokens=1024,
-            ),
-        )
-        reply = (response.text or "").strip()
+                max_tokens=1024,
+            )
+        response = await asyncio.to_thread(_call_groq)
+        reply = (response.choices[0].message.content or "").strip()
         return reply or "🤔 I couldn't come up with a response for that. Try rephrasing!"
     except Exception as e:
-        print(f"[AI Generation Error Details]: {type(e).__name__} - {e}")
+        print(f"[Groq AI Generation Error]: {type(e).__name__} - {e}")
         return f"⚠️ **AI Error:** `{type(e).__name__}` — Check Render console logs."
 
 # ==============================================================================
@@ -771,7 +773,7 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
         pass
 
 # ==============================================================================
-# UI COMPONENTS & MODALS (Safeguarded against 404 Unknown Message)
+# UI COMPONENTS & MODALS
 # ==============================================================================
 async def _schedule_message_deletion(message: Optional[discord.Message], delay: float = 7.0):
     if not message:
@@ -1283,9 +1285,9 @@ async def on_ready():
         test_ch = await get_or_create_system_channel(guild, "🧪・bot-testing", "bot-testing")
         await get_or_create_system_channel(guild, "📜・audit-logs", "audit-logs")
         if test_ch:
-            embed = discord.Embed(title="🧪 Arkbot Startup Diagnostic", description="Clean start & AI dynamic generation active (Unrestricted).", color=discord.Color.green(), timestamp=discord.utils.utcnow())
+            embed = discord.Embed(title="🧪 Arkbot Startup Diagnostic", description="Clean start & Groq AI engine active (Unrestricted).", color=discord.Color.green(), timestamp=discord.utils.utcnow())
             embed.add_field(name="Latency", value=f"`{round(bot.latency * 1000)}ms`")
-            embed.add_field(name="AI Engine", value="`Online`" if ai_client else "`Missing API Key`")
+            embed.add_field(name="AI Engine", value="`Online`" if groq_client else "`Missing API Key`")
             await test_ch.send(embed=embed)
 
 @bot.event
@@ -1478,9 +1480,9 @@ async def birthday_announcer_task():
 @bot.command(name="ai", aliases=["ask", "chat"])
 async def ai_command(ctx: commands.Context, *, prompt: Optional[str] = None):
     if not prompt:
-        return await ctx.reply("⚠️ Please provide a prompt! Example: `.ai Hello, Gemini!`", mention_author=False)
-    if not ai_client:
-        return await ctx.reply("⚠️ **AI Engine Offline:** `GEMINI_API_KEY` is missing on Render.", mention_author=False)
+        return await ctx.reply("⚠️ Please provide a prompt! Example: `.ai Hello!`", mention_author=False)
+    if not groq_client:
+        return await ctx.reply("⚠️ **AI Engine Offline:** `GROQ_API_KEY` is missing on Render.", mention_author=False)
 
     async with ctx.typing():
         try:
