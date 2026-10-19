@@ -479,28 +479,25 @@ async def handle_level_up(
 # ==============================================================================
 # AUTHORITY CHECKS & SYSTEM HELPERS
 # ==============================================================================
+def has_high_command_access(member: Union[discord.Member, discord.User], guild: Optional[discord.Guild]) -> bool:
+    if not guild or not isinstance(member, discord.Member):
+        return False
+    if member.id == guild.owner_id or getattr(member.guild_permissions, "administrator", False):
+        return True
+    authority_roles = {"supreme leader", "highness", "authority"}
+    user_roles = {r.name.lower().strip() for r in getattr(member, "roles", [])}
+    return bool(authority_roles.intersection(user_roles))
+
 def is_authority_holder():
     async def predicate(ctx: commands.Context):
-        if not ctx.guild:
-            return False
-        if ctx.author.id == ctx.guild.owner_id or getattr(ctx.author.guild_permissions, "administrator", False):
-            return True
-        authority_roles = {"supreme leader", "highness", "authority"}
-        user_roles = {r.name.lower().strip() for r in getattr(ctx.author, "roles", [])}
-        if bool(authority_roles.intersection(user_roles)):
+        if has_high_command_access(ctx.author, ctx.guild):
             return True
         raise commands.CheckFailure("⛔ **Restricted:** Only Administrators and Authority holders can execute this command.")
     return commands.check(predicate)
 
 def is_purge_authorized():
     async def predicate(ctx: commands.Context):
-        if not ctx.guild:
-            return False
-        if ctx.author.id == ctx.guild.owner_id or getattr(ctx.author.guild_permissions, "administrator", False):
-            return True
-        purge_roles = {"supreme leader", "highness", "authority"}
-        user_roles = {r.name.lower().strip() for r in getattr(ctx.author, "roles", [])}
-        if bool(purge_roles.intersection(user_roles)):
+        if has_high_command_access(ctx.author, ctx.guild):
             return True
         raise commands.CheckFailure("⛔ **Restricted:** The purge command is strictly reserved for **Supreme Leader**, **Highness**, and **Authority**.")
     return commands.check(predicate)
@@ -1316,6 +1313,9 @@ class TicketView(View):
         clean_user_name = re.sub(r"[^a-zA-Z0-9_-]", "", interaction.user.name).lower() or "user"
         channel_name = f"ticket-{clean_user_name}"
 
+        if existing_ticket := discord.utils.get(guild.text_channels, name=channel_name):
+            return await interaction.followup.send(f"⚠️ You already have an active ticket open: {existing_ticket.mention}", ephemeral=True)
+
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True),
@@ -1354,6 +1354,8 @@ class AdminActionModal(Modal):
         
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        if not has_high_command_access(interaction.user, interaction.guild):
+            return await interaction.followup.send("⛔ **Restricted:** Administrator or High Command permissions required.", ephemeral=True)
         if self.member.top_role >= interaction.guild.me.top_role and self.member.id != interaction.guild.owner_id:
             return await interaction.followup.send("⚠️ Cannot modify this user due to Discord Role Hierarchy.", ephemeral=True)
             
@@ -1381,15 +1383,21 @@ class AdminUserActionsView(View):
 
     @discord.ui.button(label="Force Change Nickname", style=discord.ButtonStyle.primary, emoji="🏷️")
     async def change_nick(self, interaction: discord.Interaction, button: Button):
+        if not has_high_command_access(interaction.user, interaction.guild):
+            return await interaction.response.send_message("⛔ **Restricted:** High Command access required.", ephemeral=True)
         await interaction.response.send_modal(AdminActionModal("Edit Nickname", self.member))
         
     @discord.ui.button(label="Override XP", style=discord.ButtonStyle.success, emoji="⭐")
     async def override_xp(self, interaction: discord.Interaction, button: Button):
+        if not has_high_command_access(interaction.user, interaction.guild):
+            return await interaction.response.send_message("⛔ **Restricted:** High Command access required.", ephemeral=True)
         await interaction.response.send_modal(AdminActionModal("Set XP", self.member))
 
     @discord.ui.button(label="Kick User", style=discord.ButtonStyle.danger, emoji="👢")
     async def kick_user(self, interaction: discord.Interaction, button: Button):
-        if self.member.top_role >= interaction.guild.me.top_role:
+        if not has_high_command_access(interaction.user, interaction.guild):
+            return await interaction.response.send_message("⛔ **Restricted:** High Command access required.", ephemeral=True)
+        if self.member.top_role >= interaction.guild.me.top_role or self.member.id == interaction.guild.owner_id:
             return await interaction.response.send_message("⚠️ Cannot kick this user due to Discord Role Hierarchy.", ephemeral=True)
         await self.member.kick(reason=f"Admin Dashboard action by {interaction.user}")
         await interaction.response.send_message(f"✅ Kicked **{self.member}**.", ephemeral=True)
@@ -1400,9 +1408,14 @@ class AdminControlPanelView(View):
         
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Select a Member to Manage...", min_values=1, max_values=1, custom_id="admin_dashboard_select")
     async def select_user(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        if not has_high_command_access(interaction.user, interaction.guild):
+            return await interaction.response.send_message("⛔ **Restricted:** Only Administrators and High Command can use the Admin Dashboard.", ephemeral=True)
+
         selected_user = select.values[0]
-        if isinstance(selected_user, discord.User):
+        if isinstance(selected_user, discord.User) and interaction.guild:
             selected_user = interaction.guild.get_member(selected_user.id)
+        if not isinstance(selected_user, discord.Member):
+            return await interaction.response.send_message("⚠️ Could not resolve member in this server.", ephemeral=True)
             
         await interaction.response.send_message(
             f"🛠️ **Managing Profile:** {selected_user.mention}\nChoose an override action below:", 
@@ -1613,7 +1626,7 @@ async def deploy_bot_commands_panel(guild: discord.Guild, prefix: str = "."):
     admin_embed.add_field(name=f"`{prefix}clean_start`", value="**Auto-clears all stale bot notifications, warnings, and alerts across the server.**", inline=False)
     admin_embed.add_field(name=f"`{prefix}deploy_panels`", value="Runs and deploys ALL server UI panels across every designated channel.", inline=False)
     admin_embed.add_field(name=f"`{prefix}admin_panel`", value="Spawns the Executive Admin UI Dashboard for forced user edits.", inline=False)
-    admin_embed.add_field(name=f"`{prefix}setup_nicknames`", value="Deploys the Level 11+ Nickname Customization panel in `#🏷️️・change-nickname`.", inline=False)
+    admin_embed.add_field(name=f"`{prefix}setup_nicknames`", value="Deploys the Level 11+ Nickname Customization panel in `#🏷・change-nickname`.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_channels`", value="Non-destructively provisions missing blueprint channels & categories.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_roles`", value="Provisions missing staff, ping, cosmetic, and tier level roles.", inline=False)
     admin_embed.add_field(name=f"`{prefix}setup_birthdays`", value="Deploys the interactive Birthday Registration panel in `🎂・birthdays`.", inline=False)
@@ -1692,7 +1705,7 @@ class ArkBot(commands.Bot):
         self.add_view(ConfessionPanelView())
         self.add_view(BirthdayPanelView())
         self.add_view(NicknamePanelView())
-        self.add_view(AdminControlPanelView()) # Admin Dashboard Registered
+        self.add_view(AdminControlPanelView())
 
         asyncio.create_task(self._auto_restore_all_guilds())
 
@@ -1742,6 +1755,10 @@ class ArkBot(commands.Bot):
             ("Green", discord.Color.from_rgb(0, 128, 0), False, False), ("Blue", discord.Color.from_rgb(0, 0, 255), False, False),
             ("Orange", discord.Color.from_rgb(255, 165, 0), False, False), ("Pink", discord.Color.from_rgb(255, 105, 180), False, False),
         ]
+        # Provision Level Tier roles
+        for _, tier_role_name in LEVEL_TIERS:
+            roles_to_deploy.append((tier_role_name, discord.Color.teal(), False, False))
+
         for r_name, r_color, r_hoist, r_mentionable in roles_to_deploy:
             if r_name.lower().strip() not in existing_roles:
                 try:
@@ -1763,6 +1780,8 @@ class ArkBot(commands.Bot):
                     if remote_backup := await find_latest_backup_from_discord(guild):
                         boot_backup = remote_backup
 
+                await self._provision_blueprint_and_roles(guild)
+
                 if boot_backup:
                     stats = await apply_unified_restore(guild, boot_backup)
                     print(f"[Auto-Boot] Restored {stats['channels_created']} channels, {stats['xp_users']} XP profiles, {stats['birthdays']} birthdays, {stats['confessions']} confessions in {guild.name}.")
@@ -1770,7 +1789,6 @@ class ArkBot(commands.Bot):
                     for uid_str, xp_val in XP_CACHE.items():
                         if member := guild.get_member(int(uid_str)): await sync_member_level_roles(member, xp_val)
 
-                await self._provision_blueprint_and_roles(guild)
                 await clear_all_bot_notifications(guild)
                 await deploy_all_system_panels(guild, self.command_prefix)
                 await enforce_admin_area_security(guild)
@@ -1815,13 +1833,7 @@ async def check_maintenance_mode(ctx: commands.Context):
     if not MAINTENANCE_MODE: return True
     if ctx.command and ctx.command.name in ["maintenance", "shutdown"]: return True
 
-    is_owner = ctx.guild and ctx.author.id == ctx.guild.owner_id
-    is_admin = getattr(getattr(ctx.author, "guild_permissions", None), "administrator", False)
-    staff_roles = {"supreme leader", "highness", "authority"}
-    user_roles = {r.name.lower().strip() for r in getattr(ctx.author, "roles", [])}
-    is_high_command = bool(staff_roles.intersection(user_roles))
-
-    if is_owner or is_admin or is_high_command: return True
+    if has_high_command_access(ctx.author, ctx.guild): return True
     await ctx.send("🛠️ **Maintenance Mode Active:** Non-administrative commands are temporarily disabled.", delete_after=6)
     return False
 
@@ -1953,8 +1965,10 @@ async def on_message(message: discord.Message):
 
     # --- TRUE MAINTENANCE LOCKDOWN ---
     if MAINTENANCE_MODE:
-        is_admin = getattr(getattr(message.author, "guild_permissions", None), "administrator", False)
-        if not is_admin:
+        if not has_high_command_access(message.author, message.guild):
+            ctx = await bot.get_context(message)
+            if ctx.valid:
+                await bot.process_commands(message)
             return  # Completely halts XP gains, drops, and tracking for non-admins
     # ---------------------------------
 
@@ -2467,7 +2481,7 @@ async def unlock_channel(ctx: commands.Context, channel: Optional[discord.TextCh
 async def hide_channel(ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
     target = channel or ctx.channel
     await target.set_permissions(ctx.guild.default_role, view_channel=False, reason=f"Hidden by {ctx.author}")
-    await ctx.send(f"👁️‍‍🗨️ {target.mention} is now hidden from standard members.")
+    await ctx.send(f"👁️‍🗨️ {target.mention} is now hidden from standard members.")
 
 @bot.command(name="show")
 @is_authority_holder()
@@ -2524,7 +2538,7 @@ async def announce(ctx: commands.Context, *, raw_content: Optional[str] = None):
     body = body or "*No message body provided.*"
 
     bot_perms = target_channel.permissions_for(ctx.guild.me)
-    if not (bot_perms.send_messages and bot_perms.embed_links): return await ctx.send(f"⚠️️ **Permission Error:** I lack `Send Messages` or `Embed Links` in {target_channel.mention}.", delete_after=8)
+    if not (bot_perms.send_messages and bot_perms.embed_links): return await ctx.send(f"⚠ **Permission Error:** I lack `Send Messages` or `Embed Links` in {target_channel.mention}.", delete_after=8)
 
     embed = discord.Embed(title=title, description=body, color=discord.Color.gold(), timestamp=discord.utils.utcnow())
     embed.set_footer(text=f"Issued by {ctx.author.display_name}")
@@ -2665,7 +2679,7 @@ async def spawn_admin_panel(ctx: commands.Context):
     await ctx.send(embed=embed, view=AdminControlPanelView())
     try: 
         await ctx.message.delete()
-    except: 
+    except Exception: 
         pass
 
 @bot.command(name="restore_xp_from_roles", aliases=["recover_xp"])
@@ -2781,8 +2795,8 @@ async def restore_all(ctx: commands.Context):
     if not backup_data: return await status_msg.edit(content="⚠️ **No master backup found!** Either attach a `.json` backup file or ensure one exists in `🩸・bot-errors`.")
 
     await status_msg.edit(content=f"🔄 **Restoring system from {source_description}...**")
-    stats = await apply_unified_restore(ctx.guild, backup_data)
     await bot._provision_blueprint_and_roles(ctx.guild)
+    stats = await apply_unified_restore(ctx.guild, backup_data)
     await clear_all_bot_notifications(ctx.guild)
     await deploy_all_system_panels(ctx.guild, bot.command_prefix)
 
