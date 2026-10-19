@@ -41,8 +41,6 @@ BIRTHDAYS_FILE = "birthdays.json"
 CONFESSIONS_FILE = "confessions.json"
 MASTER_BACKUP_TEMPLATE = "master_backup_{guild_id}.json"
 
-ise (under 1800 characters). "
-    "Keep all content strictly tee# --- AI CONFIGURATION & MEMORY ---
 # --- AI CONFIGURATION & MEMORY ---
 GEMINI_API_KEY = (
     os.getenv("GEMINI_API_KEY")
@@ -52,12 +50,8 @@ GEMINI_API_KEY = (
 ).strip().strip('"').strip("'")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if (GENAI_AVAILABLE and GEMINI_API_KEY) else None
+AI_MODEL = "gemini-flash-latest"  # Prevents 404 model version errors
 
-# Using gemini-flash-latest avoids 404 Not Found version mismatches
-AI_MODEL = "gemini-flash-latest"
-AI_BETA_MODEL = "gemini-flash-latest"
-
-AI_CHAT_HISTORY: Dict[int, deque] = defaultdict(lambda: deque(maxlen=16))
 AI_USER_COOLDOWNS: Dict[int, float] = {}
 AI_COOLDOWN_SECONDS = 3.0
 
@@ -67,51 +61,6 @@ AI_SYSTEM_PROMPT = (
     "Keep all content strictly teen-friendly and respectful of Discord Terms of Service. "
     "You were engineered by iamthesubhanahmed (Tier3.pk)."
 )
-
-# ==============================================================================
-# AI DYNAMIC GENERATION HELPERS (Safeguarded)
-# ==============================================================================
-async def ai_dynamic_text(task_prompt: str, fallback: str) -> str:
-    """Generates dynamic one-liner preset messages via AI instead of hardcoded lists."""
-    if not AI_ENABLED or not ai_client:
-        return fallback
-    try:
-        resp = await ai_client.aio.models.generate_content(
-            model=AI_MODEL,
-            contents=task_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction="You write short, vivid 1-sentence Discord server messages with 1-2 emojis. Output ONLY the message text, no quotes.",
-                temperature=0.9,
-                max_output_tokens=80,
-            ),
-        )
-        return (resp.text or "").strip().strip('"') or fallback
-    except Exception:
-        return fallback
-
-async def generate_ai_reply(channel_id: int, user_name: str, prompt_text: str, use_beta: bool = False) -> str:
-    if not AI_ENABLED:
-        return "⚠️ **AI Engine is currently paused** by server administrators."
-    if not ai_client:
-        return "⚠️ **AI Engine Offline:** Ensure `GEMINI_API_KEY` is set on Render and `google-genai` is installed."
-
-    formatted_input = f"{user_name}: {prompt_text}"
-
-    try:
-        response = await ai_client.aio.models.generate_content(
-            model=AI_MODEL,
-            contents=formatted_input,
-            config=types.GenerateContentConfig(
-                system_instruction=AI_SYSTEM_PROMPT,
-                temperature=0.75,
-                max_output_tokens=1024,
-            ),
-        )
-        reply = (response.text or "").strip()
-        return reply or "🤔 I couldn't come up with a response for that. Try rephrasing!"
-    except Exception as e:
-        print(f"[AI Generation Error Details]: {type(e).__name__} - {e}")
-        return f"⚠️ **AI Error:** `{type(e).__name__}` — Check Render console logs."
 
 # In-memory caches & state
 AFK_USERS: Dict[int, Dict[str, Any]] = {}
@@ -168,7 +117,7 @@ LEVEL_TIERS: List[Tuple[int, str]] = [
 COLOR_ROLES = ["Red", "Yellow", "Green", "Blue", "Orange", "Pink"]
 
 # ==============================================================================
-# AI DYNAMIC GENERATION HELPERS (Repaired to prevent ClientError)
+# AI DYNAMIC GENERATION HELPERS (Safeguarded)
 # ==============================================================================
 async def ai_dynamic_text(task_prompt: str, fallback: str) -> str:
     """Generates dynamic one-liner preset messages via AI instead of hardcoded lists."""
@@ -185,22 +134,20 @@ async def ai_dynamic_text(task_prompt: str, fallback: str) -> str:
             ),
         )
         return (resp.text or "").strip().strip('"') or fallback
-    except Exception as e:
-        print(f"[AI Dynamic Text Error]: {type(e).__name__} - {e}")
+    except Exception:
         return fallback
 
-async def generate_ai_reply(channel_id: int, user_name: str, prompt_text: str, use_beta: bool = False) -> str:
+async def generate_ai_reply(user_name: str, prompt_text: str) -> str:
     if not AI_ENABLED:
         return "⚠️ **AI Engine is currently paused** by server administrators."
     if not ai_client:
-        return "⚠️ **AI Engine Offline:** Ensure `GEMINI_API_KEY` is set on Render and `google-genai` is installed."
+        return "⚠️ **AI Engine Offline:** Ensure `GEMINI_API_KEY` is set properly on Render."
 
     formatted_input = f"{user_name}: {prompt_text}"
-    model_to_use = AI_BETA_MODEL if use_beta else AI_MODEL
 
     try:
         response = await ai_client.aio.models.generate_content(
-            model=model_to_use,
+            model=AI_MODEL,
             contents=formatted_input,
             config=types.GenerateContentConfig(
                 system_instruction=AI_SYSTEM_PROMPT,
@@ -211,8 +158,8 @@ async def generate_ai_reply(channel_id: int, user_name: str, prompt_text: str, u
         reply = (response.text or "").strip()
         return reply or "🤔 I couldn't come up with a response for that. Try rephrasing!"
     except Exception as e:
-        print(f"[AI Generation Error]: {type(e).__name__} - {e}")
-        return f"⚠️ **AI ClientError:** `{e}`"
+        print(f"[AI Generation Error Details]: {type(e).__name__} - {e}")
+        return f"⚠️ **AI Error:** `{type(e).__name__}` — Check Render console logs."
 
 # ==============================================================================
 # SERVER BLUEPRINT
@@ -1204,12 +1151,12 @@ async def deploy_all_system_panels(guild: discord.Guild, prefix: str = "."):
             f"**Moderation:** `{prefix}ban`, `{prefix}kick`, `{prefix}mute`, `{prefix}unmute`, `{prefix}warn`\n"
             f"**Channels:** `{prefix}purge`, `{prefix}lock`, `{prefix}unlock`, `{prefix}hide`, `{prefix}show`, `{prefix}permit`, `{prefix}revoke`\n"
             f"**XP & Drops:** `{prefix}addxp`, `{prefix}removexp`, `{prefix}setxp`, `{prefix}superdrop`, `{prefix}xpdrop`\n"
-            f"**AI Controls:** `{prefix}ai <prompt>`, `{prefix}clear_ai`, `{prefix}ai_toggle`"
+            f"**AI Controls:** `{prefix}ai <prompt>`, `{prefix}ai_toggle`"
         ), color=discord.Color.gold()))
     await _deploy_panel_if_missing(guild, ["💼・bot-commands", "bot-commands"], "MASTER COMMAND DIRECTORY",
         discord.Embed(title="🤖 CHILL-VERSE BOT MASTER COMMAND DIRECTORY", description=(
             f"**General:** `{prefix}ping`, `{prefix}about`, `{prefix}bump`, `{prefix}revive`, `{prefix}xp`, `{prefix}birthdays`, `{prefix}afk`\n"
-            f"**AI Companion:** `{prefix}ai <prompt>`, `{prefix}clear_ai`, `{prefix}ai_toggle` (**Active everywhere in the server!**)\n"
+            f"**AI Companion:** `{prefix}ai <prompt>`, `{prefix}ai_toggle` (**Active everywhere when tagged!**)\n"
             f"**Staff & Authority:** `{prefix}ban`, `{prefix}kick`, `{prefix}mute`, `{prefix}unmute`, `{prefix}warn`, `{prefix}purge`, `{prefix}lock`, `{prefix}unlock`, `{prefix}announce`\n"
             f"**System & Recovery:** `{prefix}clean_start`, `{prefix}deploy_panels`, `{prefix}admin_panel`, `{prefix}backup_all`, `{prefix}restore_all`, `{prefix}restore_xp_from_roles`, `{prefix}maintenance`, `{prefix}shutdown`"
         ), color=discord.Color.blurple()))
@@ -1445,7 +1392,7 @@ async def on_message(message: discord.Message):
                 clean_prompt = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
                 if clean_prompt:
                     async with message.channel.typing():
-                        reply = await generate_ai_reply(message.channel.id, message.author.display_name, clean_prompt)
+                        reply = await generate_ai_reply(message.author.display_name, clean_prompt)
                     await message.reply(reply[:1950], mention_author=False)
 
         if isinstance(message.channel, discord.TextChannel) and message.channel.category and "chill area" in message.channel.category.name.lower() and ch_name not in SYSTEM_CHANNELS:
@@ -1537,17 +1484,12 @@ async def ai_command(ctx: commands.Context, *, prompt: Optional[str] = None):
 
     async with ctx.typing():
         try:
-            reply = await generate_ai_reply(ctx.channel.id, ctx.author.display_name, prompt)
+            reply = await generate_ai_reply(ctx.author.display_name, prompt)
             await ctx.reply(reply[:1950], mention_author=False)
         except Exception as e:
             print(f"[AI Command Error]: {type(e).__name__} - {e}")
             traceback.print_exc()
             await ctx.reply(f"⚠️ **AI Generation Error:** `{type(e).__name__}`.", mention_author=False)
-
-@bot.command(name="clear_ai", aliases=["reset_ai"])
-async def clear_ai_memory(ctx: commands.Context):
-    AI_CHAT_HISTORY[ctx.channel.id].clear()
-    await ctx.send("🧹 **Cleared AI conversation memory for this channel!**", delete_after=6)
 
 @bot.command(name="ai_toggle", aliases=["toggle_ai"])
 @is_authority_holder()
