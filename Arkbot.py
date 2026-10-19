@@ -50,8 +50,8 @@ GEMINI_API_KEY = (
 ).strip().strip('"').strip("'")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if (GENAI_AVAILABLE and GEMINI_API_KEY) else None
-AI_MODEL = "gemini-2.5-flash"
-AI_BETA_MODEL = "gemini-2.5-pro"
+AI_MODEL = "gemini-1.5-flash"
+AI_BETA_MODEL = "gemini-1.5-pro"
 
 AI_CHAT_HISTORY: Dict[int, deque] = defaultdict(lambda: deque(maxlen=16))
 AI_USER_COOLDOWNS: Dict[int, float] = {}
@@ -119,7 +119,7 @@ LEVEL_TIERS: List[Tuple[int, str]] = [
 COLOR_ROLES = ["Red", "Yellow", "Green", "Blue", "Orange", "Pink"]
 
 # ==============================================================================
-# AI DYNAMIC GENERATION HELPERS
+# AI DYNAMIC GENERATION HELPERS (Repaired to prevent ClientError)
 # ==============================================================================
 async def ai_dynamic_text(task_prompt: str, fallback: str) -> str:
     """Generates dynamic one-liner preset messages via AI instead of hardcoded lists."""
@@ -136,7 +136,8 @@ async def ai_dynamic_text(task_prompt: str, fallback: str) -> str:
             ),
         )
         return (resp.text or "").strip().strip('"') or fallback
-    except Exception:
+    except Exception as e:
+        print(f"[AI Dynamic Text Error]: {type(e).__name__} - {e}")
         return fallback
 
 async def generate_ai_reply(channel_id: int, user_name: str, prompt_text: str, use_beta: bool = False) -> str:
@@ -145,28 +146,24 @@ async def generate_ai_reply(channel_id: int, user_name: str, prompt_text: str, u
     if not ai_client:
         return "⚠️ **AI Engine Offline:** Ensure `GEMINI_API_KEY` is set on Render and `google-genai` is installed."
 
-    history = AI_CHAT_HISTORY[channel_id]
     formatted_input = f"{user_name}: {prompt_text}"
-    contents = [types.Content(role=r, parts=[types.Part.from_text(text=t)]) for r, t in history]
-    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=formatted_input)]))
+    model_to_use = AI_BETA_MODEL if use_beta else AI_MODEL
 
     try:
         response = await ai_client.aio.models.generate_content(
-            model=AI_BETA_MODEL if use_beta else AI_MODEL,
-            contents=contents,
+            model=model_to_use,
+            contents=formatted_input,
             config=types.GenerateContentConfig(
                 system_instruction=AI_SYSTEM_PROMPT,
                 temperature=0.75,
                 max_output_tokens=1024,
             ),
         )
-        reply = (response.text or "").strip() or "🤔 I couldn't come up with a response for that. Try rephrasing!"
-        history.append(("user", formatted_input))
-        history.append(("model", reply))
-        return reply
+        reply = (response.text or "").strip()
+        return reply or "🤔 I couldn't come up with a response for that. Try rephrasing!"
     except Exception as e:
         print(f"[AI Generation Error]: {type(e).__name__} - {e}")
-        return f"⚠️ **AI Generation Error:** `{type(e).__name__}` — Please try again shortly."
+        return f"⚠️ **AI ClientError:** `{e}`"
 
 # ==============================================================================
 # SERVER BLUEPRINT
@@ -778,7 +775,7 @@ async def schedule_bump_timers(guild: discord.Guild, origin_channel: discord.Tex
         pass
 
 # ==============================================================================
-# UI COMPONENTS & MODALS
+# UI COMPONENTS & MODALS (Safeguarded against 404 Unknown Message)
 # ==============================================================================
 async def _schedule_message_deletion(message: Optional[discord.Message], delay: float = 7.0):
     if not message:
@@ -859,8 +856,12 @@ class XPDropView(View):
             color=discord.Color.from_rgb(255, 69, 0) if self.is_super else discord.Color.green(), timestamp=discord.utils.utcnow()
         )
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        await interaction.response.edit_message(embed=embed, view=self)
-        asyncio.create_task(_schedule_message_deletion(interaction.message, delay=7.0))
+        try:
+            await interaction.response.edit_message(embed=embed, view=self)
+        except discord.NotFound:
+            await interaction.response.send_message(f"✅ Claimed `+{self.xp_amount:,} XP`!", ephemeral=True)
+
+        asyncio.create_task(_schedule_message_deletion(self.message, delay=7.0))
         if isinstance(interaction.user, discord.Member):
             await handle_level_up(interaction.user, prev_xp, new_xp, interaction.channel)
 
@@ -1389,7 +1390,6 @@ async def on_message(message: discord.Message):
         ch_name = getattr(message.channel, "name", "")
         is_bot_mentioned = bot.user in message.mentions
 
-        # Unrestricted AI Chat: Responds to direct mentions anywhere OR if AI command prefix isn't used
         if is_bot_mentioned and AI_ENABLED:
             if now_ts - AI_USER_COOLDOWNS.get(message.author.id, 0.0) >= AI_COOLDOWN_SECONDS:
                 AI_USER_COOLDOWNS[message.author.id] = now_ts
